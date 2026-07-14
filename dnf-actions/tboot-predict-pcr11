@@ -1,0 +1,242 @@
+#!/usr/bin/env bash
+#
+# /usr/local/sbin/tboot-predict-pcr11
+#
+# Predict the final (post-`ready`) PCR 11 value the system should see at
+# userland after booting a UKI signed by the validated
+# /etc/kernel/install.d/80-tpm2-sign.install hook. Optionally store the
+# prediction at /root/tboot-lab/state/expected-pcr11-after-hook-uki.txt for
+# later runtime comparison.
+#
+# Role: PREDICTION ONLY.
+#
+# Allowed:
+#   - systemd-measure calculate (read-only PCR-chain math)
+#   - objdump -h / objcopy --dump-section against a tmpfs copy of the input UKI
+#   - atomic write of expected PCR 11 value to the canonical state file
+#
+# Forbidden (audit boundary; not code-enforced):
+#   - systemd-measure sign        (signing authority belongs to 80-tpm2-sign)
+#   - ukify build                 (signing authority belongs to 80-tpm2-sign)
+#   - sbsign / sbverify (as signing step)
+#   - systemd-cryptenroll         (LUKS keyslot authority belongs to Module 3)
+#   - any write outside /root/tboot-lab/state/expected-pcr11-after-hook-uki.txt
+#     and a tmpfs scratch directory
+#
+# State-dir policy:
+#   - The script NEVER creates ${STATE_DIR}. The install step (gate 4) is
+#     responsible for creating it as root:root 0700. When --store is set,
+#     the script refuses to write unless the directory exists, is not a
+#     symlink, is owned root:root, and has mode 0700.
+#
+# This script is the canonical sibling of /usr/local/sbin/tboot-dnf-helper.
+# It is also safe to invoke standalone for ad-hoc prediction.
+#
+# Scratch directory lives on /run (tmpfs) and is verified to be tmpfs before
+# any UKI section is written into it. The cleanup trap is identical in
+# shape to the helper's: rc preservation, recursion disable, then shred + rm.
+#
+# References:
+#   06F finding D    (systemd-measure calculate output format)
+#   06B Steps 17, 25 (canonical PCR 11 prediction flow)
+#
+
+set -euo pipefail
+
+readonly PREDICT_VERSION="0.1.0-draft-B.2.2-pre-validation"
+readonly TAG="tboot-predict-pcr11"
+
+readonly MEASURE="/usr/lib/systemd/systemd-measure"
+readonly STATE_DIR="/root/tboot-lab/state"
+readonly STATE_FILE="${STATE_DIR}/expected-pcr11-after-hook-uki.txt"
+readonly STATE_DIR_MODE="700"
+readonly STATE_DIR_OWNER="root:root"
+
+# ============================================================================
+# Mutable state (set during execution)
+# ============================================================================
+
+WORK=""
+
+# ============================================================================
+# Logging
+# ============================================================================
+
+log()  { logger -t "$TAG" -- "$*"; printf '[%s] %s\n' "$TAG" "$*" >&2; }
+info() { log "info: $*"; }
+err()  { log "error: $*"; }
+
+# ============================================================================
+# Trap — preserve rc, disable recursion, shred + rm scratch, exit rc
+# ============================================================================
+
+# shellcheck disable=SC2317,SC2329  # invoked via trap below
+_cleanup() {
+    local rc=$?
+    set +e
+    trap - EXIT HUP INT TERM
+    if [[ -n "$WORK" && -d "$WORK" ]]; then
+        find "$WORK" -type f -exec shred -u {} + 2>/dev/null || true
+        rm -rf "$WORK" 2>/dev/null || true
+    fi
+    exit "$rc"
+}
+trap _cleanup EXIT HUP INT TERM
+
+# ============================================================================
+# Usage and argument parsing
+# ============================================================================
+
+usage() {
+    cat >&2 <<EOF
+usage: tboot-predict-pcr11 [--store|--version|--help] /path/to/uki.efi
+
+  --store     Write FINAL_PCR11 atomically to ${STATE_FILE}.
+              Refuses to write unless ${STATE_DIR} exists, is not a
+              symlink, is owned ${STATE_DIR_OWNER}, and has mode ${STATE_DIR_MODE}.
+  --version   Print version and exit
+  --help, -h  This text
+EOF
+}
+
+STORE=0
+while [[ "${1:-}" == --* ]]; do
+    case "$1" in
+        --store)     STORE=1; shift ;;
+        --version)   printf '%s %s\n' "$TAG" "$PREDICT_VERSION"; exit 0 ;;
+        --help|-h)   usage; exit 0 ;;
+        *)           err "unknown flag: $1"; usage; exit 2 ;;
+    esac
+done
+
+UKI="${1:-}"
+if [[ -z "$UKI" ]]; then
+    usage
+    exit 2
+fi
+if [[ ! -f "$UKI" ]]; then
+    err "UKI not found: $UKI"
+    exit 2
+fi
+
+if [[ "$(id -u)" -ne 0 ]]; then
+    err "must run as root (writes under ${STATE_DIR} when --store is set)"
+    exit 1
+fi
+
+if [[ ! -x "$MEASURE" ]]; then
+    err "missing executable: ${MEASURE}"
+    exit 1
+fi
+
+# ============================================================================
+# Scratch directory on /run (tmpfs) — verified before use
+# ============================================================================
+
+WORK="$(mktemp -d -p /run -t pcr11-predict-XXXXXX)"
+chmod 0700 "$WORK"
+
+WORK_FSTYPE="$(stat -f -c '%T' "$WORK")"
+if [[ "$WORK_FSTYPE" != "tmpfs" ]]; then
+    err "scratch dir ${WORK} is on ${WORK_FSTYPE}, not tmpfs — aborting"
+    exit 1
+fi
+
+info "predicting PCR 11 for ${UKI}"
+
+# ============================================================================
+# Section extraction (against a copy; never run write paths on the source)
+# ============================================================================
+
+cp "$UKI" "$WORK/uki.efi"
+
+for sec in linux initrd cmdline osrel uname sbat pcrpkey; do
+    if objdump -h "$WORK/uki.efi" \
+        | awk -v s=".$sec" '$2==s {found=1} END{exit !found}'; then
+        objcopy --dump-section ".$sec=$WORK/$sec" "$WORK/uki.efi"
+    else
+        err "missing required section .$sec in $UKI"
+        exit 1
+    fi
+done
+
+# ============================================================================
+# PCR 11 chain calculation
+# ============================================================================
+
+if "$MEASURE" calculate \
+        --linux="$WORK/linux" \
+        --initrd="$WORK/initrd" \
+        --cmdline="$WORK/cmdline" \
+        --osrel="$WORK/osrel" \
+        --uname="$WORK/uname" \
+        --sbat="$WORK/sbat" \
+        --pcrpkey="$WORK/pcrpkey" \
+        --bank=sha256 \
+        >"$WORK/pcr11-calc.txt" 2>"$WORK/pcr11-calc.err"; then
+    :
+else
+    rc=$?
+    err "systemd-measure calculate failed (rc=${rc})"
+    while IFS= read -r line; do err "  measure: $line"; done <"$WORK/pcr11-calc.err"
+    exit "$rc"
+fi
+
+# Parse the final (post-`ready`) PCR 11 line. systemd-measure emits one
+# 11:sha256=... line per phase; the last is the post-`ready` value, which
+# is what userland sees and what the runtime comparison file should hold.
+# See 06F finding D.
+FINAL="$(grep -oE '11:sha256=[0-9a-f]{64}' "$WORK/pcr11-calc.txt" \
+        | tail -1 | cut -d= -f2 | tr 'a-f' 'A-F')"
+
+if [[ -z "$FINAL" ]]; then
+    err "failed to parse final PCR 11 from systemd-measure output"
+    err "raw systemd-measure stdout follows:"
+    while IFS= read -r line; do err "  measure: $line"; done <"$WORK/pcr11-calc.txt"
+    exit 1
+fi
+
+printf 'FINAL_PCR11=%s\n' "$FINAL"
+info "predicted FINAL_PCR11=${FINAL} for ${UKI}"
+
+# ============================================================================
+# Optional atomic store
+#
+# Read-only validation of STATE_DIR safety before any write. The install
+# step (gate 4) is responsible for creating ${STATE_DIR} as
+# ${STATE_DIR_OWNER} ${STATE_DIR_MODE}. This script NEVER creates it.
+# ============================================================================
+
+if [[ "$STORE" -eq 1 ]]; then
+    if [[ -L "$STATE_DIR" ]]; then
+        err "state directory ${STATE_DIR} is a symlink; refusing to write"
+        exit 1
+    fi
+    if [[ ! -d "$STATE_DIR" ]]; then
+        err "state directory ${STATE_DIR} does not exist; --store cannot proceed (install step must create it as ${STATE_DIR_OWNER} ${STATE_DIR_MODE})"
+        exit 1
+    fi
+    sd_owner="$(stat -c '%U:%G' "$STATE_DIR" 2>/dev/null || true)"
+    sd_mode="$(stat -c '%a'   "$STATE_DIR" 2>/dev/null || true)"
+    if [[ "$sd_owner" != "$STATE_DIR_OWNER" ]]; then
+        err "state directory ${STATE_DIR} owner=${sd_owner} (expected ${STATE_DIR_OWNER}); refusing to write"
+        exit 1
+    fi
+    if [[ "$sd_mode" != "$STATE_DIR_MODE" ]]; then
+        err "state directory ${STATE_DIR} mode=${sd_mode} (expected ${STATE_DIR_MODE}); refusing to write"
+        exit 1
+    fi
+    if [[ ! -w "$STATE_DIR" ]]; then
+        err "state directory ${STATE_DIR} not writable by current uid; refusing to write"
+        exit 1
+    fi
+
+    TMP="$(mktemp -p "$STATE_DIR" .expected-pcr11.XXXXXX)"
+    printf '%s\n' "$FINAL" >"$TMP"
+    chmod 0600 "$TMP"
+    mv -f "$TMP" "$STATE_FILE"
+    printf 'stored: %s\n' "$STATE_FILE"
+    info "stored ${STATE_FILE}"
+fi
+
+exit 0

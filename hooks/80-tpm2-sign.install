@@ -1,0 +1,296 @@
+#!/bin/bash
+#
+# /etc/kernel/install.d/80-tpm2-sign.install
+#
+# Forward-seal kernel-install-built UKIs by rebuilding the staged UKI via
+# `ukify build` with native PCR signing flags. Operates entirely on
+# $KERNEL_INSTALL_STAGING_AREA and runs before 90-uki-copy.install — on any
+# failure, the ESP is never touched.
+#
+# References:
+#   Module 5 §2.2          (TPM-sealed signing key)
+#   Module 5 §3.2          (kernel-install hook design — updated)
+#   Runbook §16.1   (corr) (objcopy unsafe for PE+ construction)
+#   Runbook §16.13  (corr) (objcopy --add-section produces firmware-rejected UKI)
+#   Runbook §16.17         (ukify build native PCR signing canonical)
+#   Runbook §16.18         (tpm2-tools required for dracut tpm2-tss)
+#   Runbook §16.19         (initramfs TPM2 userspace required for full phase chain)
+#   Runbook §20            (Block B.3 live execution log)
+#   Runbook §21            (this hook architecture)
+#
+
+set -euo pipefail
+
+#============================================================================
+# Constants
+#============================================================================
+
+readonly TAG="80-tpm2-sign"
+readonly SCRATCH="/run/tboot-sign"
+readonly UKI_NAME="uki.efi"
+readonly DB_KEY="/etc/uefi-keys/db.key"
+readonly DB_CRT="/etc/uefi-keys/db.crt"
+readonly PCR_PUB="/etc/systemd/tpm2-pcr-public-key.pem"
+readonly PCR_ENC="/etc/systemd/tpm2-pcr-private-key.pem.enc"
+readonly CRED_NAME="tpm2-pcr-signing-key"
+
+# Section-VMA sanity threshold: any section at VMA >= this is a §16.13-style
+# layout corruption indicator. ukify-built UKIs always have all sections in
+# a contiguous low-GB range (typically < 0x180000000).
+readonly VMA_SANITY_THRESHOLD="0x180000000"
+
+#============================================================================
+# Logging helpers
+#============================================================================
+
+log()  { logger -t "$TAG" -- "$*"; printf '[%s] %s\n' "$TAG" "$*" >&2; }
+info() { log "info: $*"; }
+err()  { log "error: $*"; }
+
+#============================================================================
+# Cleanup trap — always shred scratch contents on exit
+#============================================================================
+
+# shellcheck disable=SC2317,SC2329  # invoked via trap below
+_cleanup() {
+    local rc=$?
+    if [[ -d "$SCRATCH" ]]; then
+        find "$SCRATCH" -type f -exec shred -u {} + 2>/dev/null || true
+        rm -rf "$SCRATCH" 2>/dev/null || true
+    fi
+    exit "$rc"
+}
+trap _cleanup EXIT HUP INT TERM
+
+#============================================================================
+# Stage 1 — Gate: only run for kernel-install add of UKI layout
+#============================================================================
+
+COMMAND="${1:-}"
+KERNEL_VERSION="${2:-}"
+
+# Only act on 'add' (not 'remove')
+[[ "$COMMAND" == "add" ]] || exit 0
+
+# Only act when kernel-install layout is uki
+[[ "${KERNEL_INSTALL_LAYOUT:-}" == "uki" ]] || exit 0
+
+# Only act when ukify is the configured UKI generator
+[[ "${KERNEL_INSTALL_UKI_GENERATOR:-ukify}" == "ukify" ]] || exit 0
+
+# Skip if kernel-install was invoked with an external UKI image (KERNEL_INSTALL_IMAGE_TYPE=uki)
+# — that path does not produce a staged UKI for us to enrich
+[[ "${KERNEL_INSTALL_IMAGE_TYPE:-}" != "uki" ]] || exit 0
+
+# kernel-install must have given us a staging area
+: "${KERNEL_INSTALL_STAGING_AREA:?KERNEL_INSTALL_STAGING_AREA must be set}"
+
+# kernel-install must have given us a kernel version
+[[ -n "$KERNEL_VERSION" ]] || { err "KERNEL_VERSION (\$2) empty"; exit 1; }
+
+# Required input artefacts must exist
+for f in "$DB_KEY" "$DB_CRT" "$PCR_PUB" "$PCR_ENC"; do
+    [[ -f "$f" ]] || { err "required file missing: $f"; exit 1; }
+done
+
+# Source artefacts ukify will read from must exist
+for f in "/lib/modules/${KERNEL_VERSION}/vmlinuz" \
+         "/boot/initramfs-${KERNEL_VERSION}.img" \
+         "/etc/kernel/cmdline" \
+         "/etc/os-release"; do
+    [[ -f "$f" ]] || { err "required source artefact missing: $f"; exit 1; }
+done
+
+info "starting for kernel ${KERNEL_VERSION}"
+
+#============================================================================
+# Stage 2 — Scratch directory (tmpfs, 0700, root-only)
+#============================================================================
+
+if [[ -d "$SCRATCH" ]]; then
+    find "$SCRATCH" -type f -exec shred -u {} + 2>/dev/null || true
+    rm -rf "$SCRATCH"
+fi
+install -d -m 0700 -o root -g root "$SCRATCH"
+
+# Confirm we're on tmpfs (defence in depth — if /run/tboot-sign somehow lands
+# on persistent storage, we abort before any key material is written there)
+SCRATCH_FSTYPE="$(stat -f -c '%T' "$SCRATCH")"
+if [[ "$SCRATCH_FSTYPE" != "tmpfs" ]]; then
+    err "scratch dir $SCRATCH is on $SCRATCH_FSTYPE, not tmpfs — aborting"
+    exit 1
+fi
+
+#============================================================================
+# Stage 3 — Locate staged UKI; sanity-check 60-ukify's output
+#============================================================================
+
+STAGED_UKI="${KERNEL_INSTALL_STAGING_AREA}/${UKI_NAME}"
+[[ -f "$STAGED_UKI" ]] || { err "staged UKI missing: $STAGED_UKI"; exit 1; }
+[[ -s "$STAGED_UKI" ]] || { err "staged UKI empty: $STAGED_UKI"; exit 1; }
+
+if ! sbverify --cert "$DB_CRT" "$STAGED_UKI" >/dev/null 2>&1; then
+    err "60-ukify produced unsigned UKI — uki.conf likely missing [UKI] SecureBoot* keys"
+    exit 1
+fi
+
+STAGED_SIZE="$(stat -c%s "$STAGED_UKI")"
+info "60-ukify output present and signed (${STAGED_SIZE} bytes) — will rebuild with .pcrsig"
+
+#============================================================================
+# Stage 5 — Unseal policy private key (no stage 4 — no extraction needed)
+#============================================================================
+
+info "unsealing policy private key (TPM2)"
+
+if ! systemd-creds decrypt \
+        --with-key=tpm2 \
+        --name="$CRED_NAME" \
+        "$PCR_ENC" \
+        "$SCRATCH/private-key.pem"
+then
+    err "systemd-creds decrypt failed (TPM2 policy mismatch or cred corrupt)"
+    exit 1
+fi
+
+chmod 0600 "$SCRATCH/private-key.pem"
+
+if ! openssl rsa -in "$SCRATCH/private-key.pem" -check -noout >/dev/null 2>&1; then
+    err "unsealed credential is not a valid RSA private key"
+    exit 1
+fi
+
+info "policy private key unsealed and validated"
+
+#============================================================================
+# Stage 7 — Rebuild UKI via ukify-native PCR signing (NEW — replaces old 4/6/7/8)
+#============================================================================
+#
+# Old hook (§18.3):
+#   stage 4: extract sections (.linux, .initrd, .pcrpkey) from staged UKI
+#   stage 6: systemd-measure sign against extracted sections → .pcrsig
+#   stage 7: objcopy --add-section .pcrsig=… into staged UKI    ← invalid (§16.13)
+#   stage 8: sbsign re-sign
+#
+# New hook: ukify build does all four atomically with correct PE+ layout.
+#
+
+info "rebuilding UKI via ukify build with native PCR signing"
+
+if ! ukify build \
+        --linux="/lib/modules/${KERNEL_VERSION}/vmlinuz" \
+        --initrd="/boot/initramfs-${KERNEL_VERSION}.img" \
+        --cmdline=@/etc/kernel/cmdline \
+        --os-release=@/etc/os-release \
+        --pcr-private-key="$SCRATCH/private-key.pem" \
+        --pcr-public-key="$PCR_PUB" \
+        --phases=enter-initrd \
+        --pcr-banks=sha256 \
+        --secureboot-private-key="$DB_KEY" \
+        --secureboot-certificate="$DB_CRT" \
+        --output="$SCRATCH/built.efi" \
+        2>"$SCRATCH/ukify.stderr"
+then
+    err "ukify build failed"
+    if [[ -s "$SCRATCH/ukify.stderr" ]]; then
+        while IFS= read -r line; do
+            err "  ukify: $line"
+        done < "$SCRATCH/ukify.stderr"
+    fi
+    exit 1
+fi
+
+# Shred private key as soon as ukify is done with it
+shred -u "$SCRATCH/private-key.pem"
+
+BUILT_SIZE="$(stat -c%s "$SCRATCH/built.efi")"
+info "ukify build succeeded (${BUILT_SIZE} bytes)"
+
+#============================================================================
+# Stage 9 — Atomic replace within staging
+#============================================================================
+#
+# 90-uki-copy.install will copy the staged UKI to the ESP. By replacing
+# $STAGED_UKI here, we ensure 90-uki-copy delivers our enriched UKI, not
+# 60-ukify's plain output.
+#
+# Two-step replace because $SCRATCH (tmpfs) and $KERNEL_INSTALL_STAGING_AREA
+# may be on different filesystems:
+#   step 1 — install built.efi to STAGED_UKI.new in the staging dir (cross-fs
+#            copy; non-atomic but to a sentinel name that 90-uki-copy ignores)
+#   step 2 — rename .new over the original within the staging dir (same fs,
+#            atomic per POSIX rename(2))
+#
+
+STAGED_NEW="${STAGED_UKI}.new"
+install -m 0600 -o root -g root "$SCRATCH/built.efi" "$STAGED_NEW"
+mv -f "$STAGED_NEW" "$STAGED_UKI"
+
+#============================================================================
+# Stage 10 — Belt-and-braces verification of the final staged UKI
+#============================================================================
+#
+# These checks must all pass. If any fail, the hook exits non-zero,
+# kernel-install aborts the transaction, and 90-uki-copy never runs —
+# the ESP is never touched.
+#
+
+# Inspect on a tmpfs copy (per corrected §16.1: never run objcopy/objdump
+# write paths against the source)
+INSPECT_COPY="$SCRATCH/final-inspect.efi"
+cp "$STAGED_UKI" "$INSPECT_COPY"
+
+# 10.1 — .pcrpkey and .pcrsig sections present
+if ! objdump -h "$INSPECT_COPY" \
+     | awk '$2==".pcrpkey"{p=1} $2==".pcrsig"{s=1} END{exit !(p && s)}'; then
+    err "final UKI missing .pcrpkey or .pcrsig"
+    exit 1
+fi
+
+# 10.2 — Authenticode signature verifies against db.crt
+if ! sbverify --cert "$DB_CRT" "$STAGED_UKI" >/dev/null 2>&1; then
+    err "final UKI sbverify failed"
+    exit 1
+fi
+
+# 10.3 — Exactly one Authenticode signer (no double-signing, no missing sig)
+sig_count="$(pesign --show-signature --in="$INSPECT_COPY" 2>/dev/null \
+              | grep -c 'common name' || true)"
+if (( sig_count != 1 )); then
+    err "final UKI has ${sig_count} Authenticode signatures (expected 1)"
+    exit 1
+fi
+
+# 10.4 — Section-VMA sanity (catch §16.13-style layout corruption)
+#
+# Any section with VMA >= $VMA_SANITY_THRESHOLD indicates the kind of
+# layout damage objcopy --add-section produced (.pcrsig at 0x200000000).
+# ukify-built UKIs never produce VMAs in this range; if this fires, the
+# build is suspect even if other checks passed.
+if objdump -h "$INSPECT_COPY" \
+   | awk -v threshold="$VMA_SANITY_THRESHOLD" '
+       /^[[:space:]]+[0-9]+[[:space:]]+\./ {
+         vma = strtonum("0x" $4)
+         if (vma >= strtonum(threshold)) {
+           printf "anomalous VMA: %s at 0x%s\n", $2, $4
+           bad = 1
+         }
+       }
+       END { exit !bad }
+     '; then
+    err "final UKI has section(s) with anomalous VMA (>= ${VMA_SANITY_THRESHOLD}) — see Runbook §16.13"
+    exit 1
+fi
+
+# 10.5 — File size within sanity range (kernel UKIs are 30–80 MB; outside
+# this is a strong signal something went wrong)
+FINAL_SIZE="$(stat -c%s "$STAGED_UKI")"
+if (( FINAL_SIZE < 20 * 1024 * 1024 || FINAL_SIZE > 200 * 1024 * 1024 )); then
+    err "final UKI size ${FINAL_SIZE} bytes is outside sanity range (20MB–200MB)"
+    exit 1
+fi
+
+shred -u "$INSPECT_COPY"
+
+info "kernel ${KERNEL_VERSION}: ukify-native signed UKI ready (${FINAL_SIZE} bytes, ${sig_count} signature)"
+exit 0

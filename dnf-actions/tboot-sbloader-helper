@@ -1,0 +1,415 @@
+#!/usr/bin/env bash
+# tboot-sbloader-helper — B.4 systemd-boot signing + propagation worker
+# Version: 0.1.0-draft-B.4-pre-validation-r4
+# Role: sign the source systemd-boot loader with the local db key, PROVE in a
+#       throwaway loopback ESP that 'bootctl --no-variables install' selects the
+#       signed binary for BOTH propagation targets, then propagate to the real
+#       ESP. Fail-closed before any real-ESP write. UKI/PCR signing is NOT this
+#       script's job.
+#
+# State layout — B.4 single locked dir /var/lib/tboot-sbloader (Option A):
+#   helper-last-error, helper-last-success            (this script)
+#   sbloader-manifest.baseline, last-computed-manifest,
+#   last-decision, last-error                         (decider: tboot-sbloader-posttrans)
+#   UNSAFE-TO-REBOOT                                   (shared sentinel)
+
+set -euo pipefail
+umask 077
+
+readonly VERSION="0.1.0-draft-B.4-pre-validation-r4"
+readonly TAG="tboot-sbloader-helper"
+
+readonly SOURCE_EFI="/usr/lib/systemd/boot/efi/systemd-bootx64.efi"
+readonly SIGNED="/usr/lib/systemd/boot/efi/systemd-bootx64.efi.signed"
+readonly ESP_SYSTEMD="/boot/efi/EFI/systemd/systemd-bootx64.efi"
+readonly ESP_BOOT="/boot/efi/EFI/BOOT/BOOTX64.EFI"
+readonly DB_KEY="/etc/uefi-keys/db.key"
+readonly DB_CRT="/etc/uefi-keys/db.crt"
+readonly STATE_DIR="/var/lib/tboot-sbloader"
+readonly SENTINEL="${STATE_DIR}/UNSAFE-TO-REBOOT"
+readonly LAST_ERROR="${STATE_DIR}/helper-last-error"
+readonly LAST_SUCCESS="${STATE_DIR}/helper-last-success"
+readonly LOCK="/run/tboot-sbloader-helper.lock"
+
+# MODE is set by main() before any stage runs: normal|self-test|dry-run
+MODE="normal"
+
+SCRATCH_MOUNTS=()
+SCRATCH_FILES=()
+SCRATCH_DIRS=()
+
+log() {
+  logger -t "$TAG" -- "$*" 2>/dev/null || true
+  printf '%s %s\n' "$TAG" "$*" >&2
+}
+
+_sha() {
+  sha256sum "$1" 2>/dev/null | awk '{print $1}' || true
+}
+
+# Hard signer-count gate: exactly one Authenticode signer.
+_signer_count() {
+  pesign --show-signature --in="$1" 2>/dev/null | grep -c 'common name' || true
+}
+
+_ensure_state_dir() {
+  [ -d "$STATE_DIR" ] && return 0
+  install -d -m 0700 -o root -g root "$STATE_DIR"
+}
+
+_write_last_error() {
+  # normal mode only
+  [ "$MODE" = "normal" ] || return 0
+
+  local stage="$1"
+  local detail="$2"
+
+  _ensure_state_dir 2>/dev/null || return 0
+
+  {
+    printf 'epoch=%s\n' "$(date +%s)"
+    printf 'date=%s\n'  "$(date -Iseconds)"
+    printf 'stage=%s\n' "$stage"
+    printf 'detail=%s\n' "$detail"
+    printf 'helper_version=%s\n' "$VERSION"
+  } > "${LAST_ERROR}.tmp" 2>/dev/null && mv -f "${LAST_ERROR}.tmp" "$LAST_ERROR" 2>/dev/null || true
+
+  chmod 0600 "$LAST_ERROR" 2>/dev/null || true
+}
+
+_ensure_sentinel() {
+  # normal mode only — never mark the boot path unsafe from self-test/dry-run
+  [ "$MODE" = "normal" ] || return 0
+
+  local reason="$1"
+
+  _ensure_state_dir 2>/dev/null || return 0
+  [ -e "$SENTINEL" ] && return 0
+
+  printf 'reason=%s\ndate=%s\n' "$reason" "$(date -Iseconds)" > "$SENTINEL" 2>/dev/null || true
+  chmod 0600 "$SENTINEL" 2>/dev/null || true
+}
+
+die_stage() {
+  local stage="$1"
+  local detail="$2"
+
+  _write_last_error "$stage" "$detail"
+  _ensure_sentinel "${stage}: ${detail}"
+  log "FAIL stage=${stage} mode=${MODE}: ${detail}"
+  exit 1
+}
+
+_cleanup() {
+  local m
+  local d
+  local f
+
+  for m in "${SCRATCH_MOUNTS[@]}"; do
+    [ -n "$m" ] && mountpoint -q "$m" 2>/dev/null && umount "$m" 2>/dev/null || true
+  done
+
+  for d in "${SCRATCH_DIRS[@]}"; do
+    [ -n "$d" ] && rmdir "$d" 2>/dev/null || true
+  done
+
+  for f in "${SCRATCH_FILES[@]}"; do
+    [ -n "$f" ] && rm -f "$f" 2>/dev/null || true
+  done
+}
+
+trap _cleanup EXIT
+
+require_root() {
+  [ "$(id -u)" -eq 0 ] || {
+    log "must run as root"
+    exit 1
+  }
+}
+
+acquire_lock() {
+  [ -L "$LOCK" ] && die_stage "lock" "lock path is a symlink: $LOCK"
+
+  exec 9>"$LOCK" || die_stage "lock" "cannot open lock: $LOCK"
+  flock -n 9 || die_stage "lock" "another instance holds $LOCK"
+}
+
+preflight() {
+  require_root
+
+  local b
+  for b in sbsign sbverify pesign bootctl mkfs.vfat mount umount losetup sha256sum logger install awk flock; do
+    command -v "$b" >/dev/null 2>&1 || die_stage "preflight" "missing binary: $b"
+  done
+
+  [ -r "$SOURCE_EFI" ] || die_stage "preflight" "source loader unreadable: $SOURCE_EFI"
+  [ -r "$DB_KEY" ] || die_stage "preflight" "db key unreadable: $DB_KEY"
+  [ -r "$DB_CRT" ] || die_stage "preflight" "db cert unreadable: $DB_CRT"
+
+  # State-dir creation is a NORMAL-mode action only.
+  if [ "$MODE" = "normal" ]; then
+    _ensure_state_dir || die_stage "preflight" "cannot create state dir: $STATE_DIR"
+  fi
+}
+
+sign_source() {
+  local dir
+  local tmp
+
+  dir="$(dirname "$SIGNED")"
+  tmp="$(mktemp "${dir}/.systemd-bootx64.efi.signed.XXXXXX")" || die_stage "sign" "mktemp failed in $dir"
+  SCRATCH_FILES+=("$tmp")
+
+  sbsign \
+    --key "$DB_KEY" \
+    --cert "$DB_CRT" \
+    --output "$tmp" \
+    "$SOURCE_EFI" >/dev/null 2>&1 || die_stage "sign" "sbsign failed on $SOURCE_EFI"
+
+  chmod 0644 "$tmp" 2>/dev/null || true
+  mv -f "$tmp" "$SIGNED" || die_stage "sign" "atomic mv to $SIGNED failed"
+
+  log "signed: $SOURCE_EFI -> $SIGNED ($(_sha "$SIGNED"))"
+}
+
+verify_signed() {
+  sbverify --cert "$DB_CRT" "$SIGNED" >/dev/null 2>&1 \
+    || die_stage "verify-signed" "sbverify rejected $SIGNED against db.crt"
+
+  [ -s "$SIGNED" ] || die_stage "verify-signed" "$SIGNED is empty"
+
+  local sc
+  sc="$(_signer_count "$SIGNED")"
+
+  [ "${sc:-0}" -eq 1 ] || die_stage "verify-signed" "$SIGNED signer_count=${sc:-0} (want exactly 1)"
+
+  log "verify-signed OK: $SIGNED sbverify-clean, signer_count=1"
+}
+
+loopback_checkpoint() {
+  local signed_sha
+  local src_sha
+  local mnt
+  local img
+  local got_sys
+  local got_boot
+  local rc
+
+  signed_sha="$(_sha "$SIGNED")"
+  src_sha="$(_sha "$SOURCE_EFI")"
+
+  mnt="$(mktemp -d /var/tmp/tboot-sbl-ckpt.XXXXXX)" || die_stage "checkpoint" "mktemp -d failed"
+  SCRATCH_DIRS+=("$mnt")
+
+  img="${mnt}.img"
+  SCRATCH_FILES+=("$img")
+
+  dd if=/dev/zero of="$img" bs=1M count=64 status=none 2>/dev/null \
+    || die_stage "checkpoint" "scratch image alloc failed"
+
+  mkfs.vfat "$img" >/dev/null 2>&1 \
+    || die_stage "checkpoint" "mkfs.vfat failed"
+
+  mount -o loop "$img" "$mnt" \
+    || die_stage "checkpoint" "loop mount failed"
+
+  SCRATCH_MOUNTS+=("$mnt")
+
+  mountpoint -q "$mnt" \
+    || die_stage "checkpoint" "scratch ESP not a mountpoint"
+
+  rc=0
+  SYSTEMD_RELAX_ESP_CHECKS=1 bootctl --no-variables --esp-path="$mnt" install >/dev/null 2>&1 || rc=$?
+
+  got_sys="$(_sha "${mnt}/EFI/systemd/systemd-bootx64.efi")"
+  got_boot="$(_sha "${mnt}/EFI/BOOT/BOOTX64.EFI")"
+
+  umount "$mnt" 2>/dev/null || true
+  rmdir "$mnt" 2>/dev/null || true
+  rm -f "$img" 2>/dev/null || true
+
+  [ "$rc" -eq 0 ] || die_stage "checkpoint" "sandbox bootctl install rc=$rc (real ESP NOT touched)"
+
+  # BOTH targets must equal .efi.signed and differ from the unsigned source.
+  [ "$got_sys" = "$signed_sha" ] \
+    || die_stage "checkpoint" "sandbox /EFI/systemd != .efi.signed (got=$got_sys signed=$signed_sha) — real ESP NOT touched"
+
+  [ "$got_boot" = "$signed_sha" ] \
+    || die_stage "checkpoint" "sandbox /EFI/BOOT/BOOTX64.EFI != .efi.signed (got=$got_boot signed=$signed_sha) — real ESP NOT touched"
+
+  [ "$got_sys" != "$src_sha" ] \
+    || die_stage "checkpoint" "sandbox /EFI/systemd == unsigned source — real ESP NOT touched"
+
+  [ "$got_boot" != "$src_sha" ] \
+    || die_stage "checkpoint" "sandbox /EFI/BOOT == unsigned source — real ESP NOT touched"
+
+  log "checkpoint PASS: bootctl install selected .efi.signed for BOTH targets in sandbox ESP ($signed_sha)"
+}
+
+real_install() {
+  bootctl --no-variables install >/dev/null 2>&1 \
+    || die_stage "install" "real bootctl --no-variables install failed"
+
+  log "propagated: bootctl --no-variables install -> ESP"
+}
+
+verify_real_esp() {
+  local signed_sha
+  local a
+  local b
+  local sa
+  local sb
+
+  signed_sha="$(_sha "$SIGNED")"
+  a="$(_sha "$ESP_SYSTEMD")"
+  b="$(_sha "$ESP_BOOT")"
+
+  [ "$a" = "$signed_sha" ] \
+    || die_stage "verify-esp" "$ESP_SYSTEMD sha=$a != signed $signed_sha"
+
+  [ "$b" = "$signed_sha" ] \
+    || die_stage "verify-esp" "$ESP_BOOT sha=$b != signed $signed_sha"
+
+  sbverify --cert "$DB_CRT" "$ESP_SYSTEMD" >/dev/null 2>&1 \
+    || die_stage "verify-esp" "$ESP_SYSTEMD sbverify failed"
+
+  sbverify --cert "$DB_CRT" "$ESP_BOOT" >/dev/null 2>&1 \
+    || die_stage "verify-esp" "$ESP_BOOT sbverify failed"
+
+  sa="$(_signer_count "$ESP_SYSTEMD")"
+  [ "${sa:-0}" -eq 1 ] \
+    || die_stage "verify-esp" "$ESP_SYSTEMD signer_count=${sa:-0} (want 1)"
+
+  sb="$(_signer_count "$ESP_BOOT")"
+  [ "${sb:-0}" -eq 1 ] \
+    || die_stage "verify-esp" "$ESP_BOOT signer_count=${sb:-0} (want 1)"
+
+  log "verify-esp OK: both ESP loaders == .efi.signed, sbverify-clean, signer_count=1"
+}
+
+write_success() {
+  _ensure_state_dir 2>/dev/null || true
+
+  {
+    printf 'epoch=%s\n' "$(date +%s)"
+    printf 'date=%s\n'  "$(date -Iseconds)"
+    printf 'signed_sha=%s\n' "$(_sha "$SIGNED")"
+    printf 'helper_version=%s\n' "$VERSION"
+  } > "${LAST_SUCCESS}.tmp" 2>/dev/null && mv -f "${LAST_SUCCESS}.tmp" "$LAST_SUCCESS" 2>/dev/null || true
+
+  chmod 0600 "$LAST_SUCCESS" 2>/dev/null || true
+}
+
+mode_self_test() {
+  preflight
+
+  log "self-test PASS: root, binaries, keys, source. No signing, no install, no state-dir, no sentinel."
+  printf 'self-test OK\n'
+}
+
+mode_dry_run() {
+  preflight
+
+  local dir
+  local tmp
+  local src_sha
+  local dry_sha
+  local sc
+
+  dir="$(mktemp -d /var/tmp/tboot-sbl-dry.XXXXXX)" || die_stage "dry-run" "mktemp -d failed"
+  SCRATCH_DIRS+=("$dir")
+
+  tmp="${dir}/systemd-bootx64.efi.signed"
+  SCRATCH_FILES+=("$tmp")
+
+  sbsign \
+    --key "$DB_KEY" \
+    --cert "$DB_CRT" \
+    --output "$tmp" \
+    "$SOURCE_EFI" >/dev/null 2>&1 || die_stage "dry-run" "sbsign failed (scratch)"
+
+  sbverify --cert "$DB_CRT" "$tmp" >/dev/null 2>&1 \
+    || die_stage "dry-run" "scratch sbverify failed"
+
+  sc="$(_signer_count "$tmp")"
+  [ "${sc:-0}" -eq 1 ] || die_stage "dry-run" "scratch signer_count=${sc:-0} (want 1)"
+
+  src_sha="$(_sha "$SOURCE_EFI")"
+  dry_sha="$(_sha "$tmp")"
+
+  rm -f "$tmp" 2>/dev/null || true
+  rmdir "$dir" 2>/dev/null || true
+
+  log "dry-run OK: scratch sign+verify+signer_count passed (src=$src_sha signed=$dry_sha). No BOOTLIBDIR/ESP/state-dir/sentinel mutation. Loopback checkpoint + real install run only in normal mode / B.5."
+  printf 'dry-run OK (no BOOTLIBDIR/ESP/state mutation)\n'
+}
+
+mode_normal() {
+  acquire_lock
+  preflight
+  sign_source
+  verify_signed
+  loopback_checkpoint
+  real_install
+  verify_real_esp
+  write_success
+
+  log "SUCCESS: source signed, checkpoint passed (both targets), ESP propagated and verified."
+}
+
+main() {
+  case "${1:-}" in
+    --version)
+      printf '%s %s\n' "$TAG" "$VERSION"
+      exit 0
+      ;;
+
+    --help|-h)
+      cat <<USAGE
+$TAG $VERSION
+
+Usage: $TAG [--self-test|--dry-run|--version|--help]
+
+  (no args)
+      normal: sign source loader, prove .efi.signed selection for BOTH
+      ESP targets in a loopback ESP, then 'bootctl --no-variables install'
+      to the real ESP, with full fail-closed verification
+      (sha match + sbverify + signer_count==1). May create state-dir,
+      helper-last-error, helper-last-success, and UNSAFE-TO-REBOOT on failure.
+
+  --self-test
+      preflight only. No mutation, no state-dir, no sentinel.
+
+  --dry-run
+      preflight + sign to scratch + sbverify + signer_count. No
+      BOOTLIBDIR/ESP/state-dir/sentinel mutation.
+USAGE
+      exit 0
+      ;;
+
+    --self-test)
+      MODE="self-test"
+      mode_self_test
+      exit 0
+      ;;
+
+    --dry-run)
+      MODE="dry-run"
+      mode_dry_run
+      exit 0
+      ;;
+
+    "")
+      MODE="normal"
+      mode_normal
+      exit 0
+      ;;
+
+    *)
+      log "unknown argument: $1"
+      exit 2
+      ;;
+  esac
+}
+
+main "$@"

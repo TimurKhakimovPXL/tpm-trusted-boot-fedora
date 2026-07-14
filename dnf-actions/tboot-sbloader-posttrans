@@ -1,0 +1,304 @@
+#!/usr/bin/env bash
+# tboot-sbloader-posttrans — B.4 systemd-boot signing DECIDER (read-and-decide)
+# Version: 0.1.0-draft-B.4-pre-validation
+# Role: compute the 5-entry boot-loader manifest, compare to the stored baseline,
+#       and decide. On confirmed drift, invoke the helper (which signs and
+#       propagates to the ESP). This script NEVER signs, NEVER runs the loader
+#       installer, and NEVER writes the ESP — it only reads, hashes, compares,
+#       records its own state files, manages the shared sentinel, and calls the
+#       helper.
+# Future canonical path: /usr/local/sbin/tboot-sbloader-posttrans (UsrMerge-aware).
+#
+# State layout — B.4 single locked dir /var/lib/tboot-sbloader (Option A):
+#   sbloader-manifest.baseline, last-computed-manifest,
+#   last-decision, last-error                 (this decider)
+#   helper-last-error, helper-last-success    (helper: tboot-sbloader-helper)
+#   UNSAFE-TO-REBOOT                           (shared sentinel)
+
+set -euo pipefail
+umask 077
+
+readonly VERSION="0.1.0-draft-B.4-pre-validation"
+readonly TAG="tboot-sbloader-posttrans"
+
+# Inputs (read-only here)
+readonly SOURCE_EFI="/usr/lib/systemd/boot/efi/systemd-bootx64.efi"
+readonly SIGNED="/usr/lib/systemd/boot/efi/systemd-bootx64.efi.signed"
+readonly ESP_SYSTEMD="/boot/efi/EFI/systemd/systemd-bootx64.efi"
+readonly ESP_BOOT="/boot/efi/EFI/BOOT/BOOTX64.EFI"
+readonly PKG="systemd-boot-unsigned"
+
+# Helper — sole privileged worker; the ONLY external command the decider invokes.
+readonly HELPER="/usr/local/sbin/tboot-sbloader-helper"
+
+# Locked Option A single state dir
+readonly STATE_DIR="/var/lib/tboot-sbloader"
+readonly BASELINE="${STATE_DIR}/sbloader-manifest.baseline"
+readonly LAST_COMPUTED="${STATE_DIR}/last-computed-manifest"
+readonly LAST_DECISION="${STATE_DIR}/last-decision"
+readonly LAST_ERROR="${STATE_DIR}/last-error"
+readonly SENTINEL="${STATE_DIR}/UNSAFE-TO-REBOOT"
+
+readonly LOCK="/run/tboot-sbloader-posttrans.lock"
+
+# MODE set by main() before any mode runs: normal|self-test|debug-print|prime
+MODE="normal"
+
+# Evaluation result globals
+DECISION=""
+REASON=""
+
+log() {
+  logger -t "$TAG" -- "$*" 2>/dev/null || true
+  printf '%s %s\n' "$TAG" "$*" >&2
+}
+
+_cleanup() {
+  rm -f "${BASELINE}.tmp" "${LAST_COMPUTED}.tmp" "${LAST_DECISION}.tmp" \
+        "${LAST_ERROR}.tmp" "${SENTINEL}.tmp" 2>/dev/null || true
+}
+trap _cleanup EXIT
+
+# set -e safe: never aborts the script; empty output on missing file.
+_sha() {
+  sha256sum "$1" 2>/dev/null | awk '{print $1}' || true
+}
+
+_sha_or() {
+  # $1=path  $2=fallback-token
+  local s
+  s="$(_sha "$1")"
+  if [ -n "$s" ]; then printf '%s' "$s"; else printf '%s' "$2"; fi
+}
+
+get_field() {
+  # $1=manifest-string  $2=key
+  printf '%s\n' "$1" | awk -F= -v k="$2" '$1==k {print $2; exit}'
+}
+
+require_root() {
+  [ "$(id -u)" -eq 0 ] || { log "must run as root"; exit 1; }
+}
+
+_check_binaries() {
+  local b
+  for b in sha256sum rpm awk logger install flock date id cat head mv; do
+    command -v "$b" >/dev/null 2>&1 || die "preflight" "missing binary: $b"
+  done
+}
+
+_ensure_state_dir() {
+  [ -d "$STATE_DIR" ] && return 0
+  install -d -m 0700 -o root -g root "$STATE_DIR"
+}
+
+die() {
+  # config/precondition error: NO sentinel (boot path untouched). Records
+  # last-error only in state-writing modes (normal|prime).
+  local stage="$1" detail="$2"
+  log "FAIL stage=${stage} mode=${MODE}: ${detail}"
+  case "$MODE" in
+    normal|prime)
+      _ensure_state_dir 2>/dev/null || true
+      {
+        printf 'epoch=%s\n' "$(date +%s)"
+        printf 'date=%s\n'  "$(date -Iseconds)"
+        printf 'stage=%s\n' "$stage"
+        printf 'detail=%s\n' "$detail"
+        printf 'decider_version=%s\n' "$VERSION"
+      } > "${LAST_ERROR}.tmp" 2>/dev/null && mv -f "${LAST_ERROR}.tmp" "$LAST_ERROR" 2>/dev/null || true
+      chmod 0600 "$LAST_ERROR" 2>/dev/null || true
+      ;;
+  esac
+  exit 1
+}
+
+acquire_lock() {
+  [ -L "$LOCK" ] && die "lock" "lock path is a symlink: $LOCK"
+  exec 9>"$LOCK" || die "lock" "cannot open lock: $LOCK"
+  flock -n 9 || die "lock" "another instance holds $LOCK"
+}
+
+compute_manifest() {
+  # Emits the frozen 5-entry manifest in fixed order.
+  local nevra se ss es eb
+  nevra="$(rpm -q "$PKG" 2>/dev/null | head -1 || true)"
+  case "$nevra" in
+    *"is not installed"*|"") nevra="NOTINSTALLED" ;;
+  esac
+  se="$(_sha_or "$SOURCE_EFI" MISSING)"
+  ss="$(_sha_or "$SIGNED" ABSENT)"
+  es="$(_sha_or "$ESP_SYSTEMD" MISSING)"
+  eb="$(_sha_or "$ESP_BOOT" MISSING)"
+  printf 'nevra=%s\n'        "$nevra"
+  printf 'src_efi=%s\n'      "$se"
+  printf 'src_signed=%s\n'   "$ss"
+  printf 'esp_systemd=%s\n'  "$es"
+  printf 'esp_boot=%s\n'     "$eb"
+}
+
+_converged_shape() {
+  # rc 0 iff: src_signed present AND both ESP copies == src_signed
+  local m="$1" ss es eb
+  ss="$(get_field "$m" src_signed)"
+  es="$(get_field "$m" esp_systemd)"
+  eb="$(get_field "$m" esp_boot)"
+  [ "$ss" != "ABSENT" ] && [ "$ss" != "MISSING" ] && [ "$es" = "$ss" ] && [ "$eb" = "$ss" ]
+}
+
+evaluate() {
+  # $1=current manifest ; sets DECISION + REASON.
+  # D-1: decision=unchanged REQUIRES baseline equality AND converged-shape.
+  local m="$1" base
+  base="$(cat "$BASELINE" 2>/dev/null || true)"
+  local equal=0 shape=0
+  if [ -n "$base" ] && [ "$m" = "$base" ]; then equal=1; fi
+  if _converged_shape "$m"; then shape=1; fi
+  if [ "$equal" = 1 ] && [ "$shape" = 1 ]; then
+    DECISION="unchanged"
+    REASON="manifest==baseline AND converged-shape"
+  else
+    DECISION="drift"
+    REASON="equal=${equal} shape=${shape}"
+  fi
+}
+
+write_last_decision() {
+  # $1=decision $2=detail
+  _ensure_state_dir 2>/dev/null || return 0
+  {
+    printf 'epoch=%s\n' "$(date +%s)"
+    printf 'date=%s\n'  "$(date -Iseconds)"
+    printf 'decision=%s\n' "$1"
+    printf 'detail=%s\n' "$2"
+    printf 'decider_version=%s\n' "$VERSION"
+  } > "${LAST_DECISION}.tmp" 2>/dev/null && mv -f "${LAST_DECISION}.tmp" "$LAST_DECISION" 2>/dev/null || true
+  chmod 0600 "$LAST_DECISION" 2>/dev/null || true
+}
+
+_write_manifest_file() {
+  # $1=dest  stdin=manifest ; atomic, same-dir
+  cat > "${1}.tmp" && mv -f "${1}.tmp" "$1"
+  chmod 0600 "$1" 2>/dev/null || true
+}
+
+mode_self_test() {
+  require_root
+  _check_binaries
+  if [ -x "$HELPER" ]; then
+    log "self-test: helper present and executable ($HELPER)"
+  else
+    log "self-test WARN: helper absent/not-executable (expected pre-install): $HELPER"
+  fi
+  log "self-test PASS: root + binaries OK. No compute, no state writes, no helper invocation."
+  printf 'self-test OK\n'
+}
+
+mode_debug_print() {
+  require_root
+  local m
+  m="$(compute_manifest)"
+  printf -- '--- computed manifest ---\n%s\n' "$m"
+  if [ -f "$BASELINE" ]; then
+    printf -- '--- baseline present: %s ---\n' "$BASELINE"
+  else
+    printf -- '--- baseline ABSENT (normal mode would FAIL CLOSED; run --prime) ---\n'
+  fi
+  evaluate "$m"
+  printf -- '--- would-be decision: %s (%s) ---\n' "$DECISION" "$REASON"
+  printf 'debug-print OK (no state writes, no helper, no lock)\n'
+}
+
+mode_prime() {
+  require_root
+  _check_binaries
+  _ensure_state_dir || die "prime" "cannot create $STATE_DIR"
+  local m
+  m="$(compute_manifest)"
+  printf '%s\n' "$m" | _write_manifest_file "$BASELINE" || die "prime" "baseline write failed"
+  printf '%s\n' "$m" | _write_manifest_file "$LAST_COMPUTED" || true
+  write_last_decision "primed" "baseline established"
+  log "prime OK: baseline written ($(_sha "$BASELINE"))"
+  printf 'prime OK\n'
+}
+
+mode_normal() {
+  acquire_lock
+  require_root
+  _check_binaries
+  _ensure_state_dir || die "normal" "cannot create $STATE_DIR"
+
+  [ -f "$BASELINE" ] || die "baseline" "baseline absent; refuse to auto-init in normal mode — run: $TAG --prime"
+
+  local cur
+  cur="$(compute_manifest)"
+  printf '%s\n' "$cur" | _write_manifest_file "$LAST_COMPUTED" || true
+
+  evaluate "$cur"
+  if [ "$DECISION" = "unchanged" ]; then
+    write_last_decision "unchanged" "$REASON"
+    log "decision=unchanged: $REASON"
+    exit 0
+  fi
+
+  # --- drift path: mark unsafe BEFORE invoking helper ---
+  printf 'reason=%s\ndate=%s\n' "drift before sbloader propagation: $REASON" "$(date -Iseconds)" \
+    > "${SENTINEL}.tmp" 2>/dev/null && mv -f "${SENTINEL}.tmp" "$SENTINEL" 2>/dev/null || true
+  chmod 0600 "$SENTINEL" 2>/dev/null || true
+  write_last_decision "drift-detected" "$REASON; invoking helper"
+  log "drift: $REASON — invoking helper"
+
+  [ -x "$HELPER" ] || die "helper" "helper not executable: $HELPER (sentinel retained)"
+
+  local hrc=0
+  "$HELPER" </dev/null || hrc=$?
+  if [ "$hrc" -ne 0 ]; then
+    write_last_decision "helper-failure" "helper exit=$hrc; sentinel retained"
+    die "helper" "helper exited $hrc"
+  fi
+
+  # helper succeeded -> confirm converged-shape, then advance baseline + clear sentinel
+  local post
+  post="$(compute_manifest)"
+  if _converged_shape "$post"; then
+    printf '%s\n' "$post" | _write_manifest_file "$BASELINE" || die "baseline" "baseline update failed"
+    printf '%s\n' "$post" | _write_manifest_file "$LAST_COMPUTED" || true
+    rm -f "$SENTINEL" 2>/dev/null || true
+    write_last_decision "helper-success" "baseline advanced; converged; sentinel cleared"
+    log "helper-success: baseline advanced, converged, sentinel cleared"
+    exit 0
+  fi
+
+  write_last_decision "helper-success-not-converged" "helper exit 0 but manifest not converged; sentinel retained"
+  die "post-helper" "helper succeeded but system not converged (sentinel retained)"
+}
+
+main() {
+  case "${1:-}" in
+    --version) printf '%s %s\n' "$TAG" "$VERSION"; exit 0 ;;
+    --help|-h)
+      cat <<USAGE
+$TAG $VERSION
+Usage: $TAG [--self-test|--debug-print|--prime|--version|--help]
+  (no args)      normal: compute manifest, compare to baseline, decide.
+                 decision=unchanged ONLY IF manifest==baseline AND src_signed
+                 present AND both ESP copies == src_signed. Otherwise drift ->
+                 write UNSAFE-TO-REBOOT -> invoke helper -> on success advance
+                 baseline and clear sentinel. Baseline absent => FAIL CLOSED
+                 (run --prime in the correct gate). Never signs; never invokes
+                 the loader installer; never writes the ESP.
+  --self-test    root + binaries (+ helper presence, warn-only). No compute,
+                 no state writes, no helper invocation.
+  --debug-print  compute + show manifest and would-be decision. No state writes,
+                 no helper, no lock.
+  --prime        establish baseline from the current manifest.
+USAGE
+      exit 0 ;;
+    --self-test)   MODE="self-test";   mode_self_test;   exit 0 ;;
+    --debug-print) MODE="debug-print"; mode_debug_print; exit 0 ;;
+    --prime)       MODE="prime";       mode_prime;       exit 0 ;;
+    "")            MODE="normal";      mode_normal;      exit 0 ;;
+    *) log "unknown argument: $1"; exit 2 ;;
+  esac
+}
+main "$@"

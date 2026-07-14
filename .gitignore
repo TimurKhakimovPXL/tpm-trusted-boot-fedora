@@ -1,0 +1,13 @@
+# Never commit key material
+*.key
+*.pem
+*.crt
+*.der
+*.esl
+*.auth
+keys/
+
+# Editor / OS noise
+*.swp
+.DS_Store
+Thumbs.db

@@ -1,0 +1,1 @@
+post_transaction:::enabled=host-only raise_error=1:/usr/local/sbin/tboot-dnf-posttrans

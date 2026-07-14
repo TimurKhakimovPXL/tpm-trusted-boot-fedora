@@ -1,0 +1,689 @@
+#!/bin/bash
+#
+# /usr/local/sbin/tboot-dnf-helper
+#
+# B.2.2 helper for the dracut-only update path of the trusted boot chain.
+# Invoked from libdnf5-plugin-actions post_transaction rules (after B.2.3
+# lands), or directly by an operator for manual rebuilds.
+#
+# Responsibilities:
+#   - Refresh /boot/initramfs-${KVER}.img via `dracut --force` for every
+#     kernel under /lib/modules/*/vmlinuz (per 06F finding G.2).
+#   - Invoke `kernel-install add ${KVER} /lib/modules/${KVER}/vmlinuz` for
+#     each kernel. This is the entry point that fires the validated
+#     /etc/kernel/install.d/80-tpm2-sign.install hook — the only UKI signing
+#     authority in this project.
+#   - Refresh /root/tboot-lab/state/expected-pcr11-after-hook-uki.txt by
+#     shelling out to the sibling /usr/local/sbin/tboot-predict-pcr11
+#     against the currently-booted kernel's MID-prefixed UKI on the ESP.
+#   - Log everything to journald under tag `tboot-dnf-helper`.
+#   - Write atomic state markers under /var/lib/tboot-dnf-helper/ — but
+#     only when that directory exists and passes safety checks.
+#
+# Trust-boundary preservation. This helper is NOT a signing authority. It
+# must never (enforced at review time, not in code):
+#   - call ukify directly
+#   - call `systemd-measure sign`
+#   - call sbsign, or invoke sbverify as a signing step
+#   - modify /etc/kernel/uki.conf, /etc/kernel/install.conf, /etc/kernel/cmdline
+#   - modify /etc/crypttab
+#   - call systemd-cryptenroll; wipe or alter any LUKS keyslot
+#   - write PK/KEK/db variables
+#   - enable systemd-boot-update.service
+#   - create, edit, rename, or remove DNF libdnf5-plugin-actions files
+#     (production action wiring is B.2.3's scope, not this script's)
+#
+# Filesystem mutation policy:
+#   - Preflight is READ-ONLY.
+#   - The helper NEVER creates STATE_DIR or PCR_STATE_DIR. Both are the
+#     install step's responsibility (gate 4). If they are missing or
+#     unsafe at run time, marker writes are skipped with a warning to
+#     journald; the helper does not attempt to repair them.
+#   - The helper's only write paths are: the ESP UKI (indirectly, via the
+#     existing kernel-install drop-in chain), /boot/initramfs-*.img (via
+#     dracut), the PCR 11 state file (via the predict sibling), markers
+#     under STATE_DIR (when safe), and a scratch dir under /run (tmpfs).
+#
+# References:
+#   05_Update_Workflows_and_Key_Storage.md §3.3 (target architecture)
+#   06F finding G.2 (dracut-then-kernel-install propagation under UKI layout)
+#   06B Step 28      (B.2.1 trigger-layer validation methodology)
+#
+
+set -euo pipefail
+
+# ============================================================================
+# Constants
+# ============================================================================
+
+readonly HELPER_VERSION="0.1.0-draft-B.2.2-pre-validation"
+readonly TAG="tboot-dnf-helper"
+
+# Lock and state
+readonly LOCK_FILE="/run/${TAG}.lock"
+readonly LOCK_TIMEOUT=120
+readonly STATE_DIR="/var/lib/${TAG}"
+readonly TXN_MARKER="${STATE_DIR}/last-transaction-id"
+readonly SUCCESS_MARKER="${STATE_DIR}/last-success"
+readonly FAILURE_MARKER="${STATE_DIR}/last-failure"
+readonly FAILURE_LOG="${STATE_DIR}/last-failure.log"
+readonly STATE_DIR_MODE="700"
+readonly STATE_DIR_OWNER="root:root"
+
+# Signing-authority pin (matches 00_Current_Project_State.md invariant table).
+# Drift here means the only signing authority has been edited; refuse to run.
+readonly SIGNING_HOOK="/etc/kernel/install.d/80-tpm2-sign.install"
+readonly SIGNING_HOOK_SHA="a455444a54f5be265f822d85f4681cba8ed5365a4323c9008835022f3b8c502f"
+
+# PCR 11 prediction store (canonical project path; not under STATE_DIR).
+readonly PCR_STATE_DIR="/root/tboot-lab/state"
+readonly PCR_STATE_FILE="${PCR_STATE_DIR}/expected-pcr11-after-hook-uki.txt"
+readonly PCR_STATE_DIR_MODE="700"
+readonly PCR_STATE_DIR_OWNER="root:root"
+
+# Sibling helpers / required binaries
+readonly PREDICT_HELPER="/usr/local/sbin/tboot-predict-pcr11"
+readonly KERNEL_INSTALL_BIN="/usr/bin/kernel-install"
+readonly DRACUT_BIN="/usr/bin/dracut"
+readonly BOOTCTL_BIN="/usr/bin/bootctl"
+
+# Dedup identity sources
+readonly BOOT_ID_FILE="/proc/sys/kernel/random/boot_id"
+
+# Hard timeouts (sec)
+readonly DRACUT_TIMEOUT=600
+readonly KERNEL_INSTALL_TIMEOUT=600
+readonly PREDICT_TIMEOUT=120
+
+# ============================================================================
+# Mutable state (set during execution)
+# ============================================================================
+
+MODE="production"     # production | dry-run | self-test
+TRIGGER_PKG="(none)"  # ${pkg.name} from action rule, or "(none)" if manual
+SCRATCH=""            # tmpdir on /run (tmpfs) for per-step log capture
+
+# ============================================================================
+# Logging
+# ============================================================================
+
+log()  { logger -t "$TAG" -- "$*"; printf '[%s] %s\n' "$TAG" "$*" >&2; }
+info() { log "info: $*"; }
+warn() { log "warn: $*"; }
+err()  { log "error: $*"; }
+
+# ============================================================================
+# Trap — cleanup only. Failure markers are written by explicit error paths.
+# ============================================================================
+
+# shellcheck disable=SC2317,SC2329  # invoked via trap below
+_cleanup() {
+    local rc=$?
+    # Paranoid: never let cleanup recurse or fail loudly
+    set +e
+    trap - EXIT HUP INT TERM
+    if [[ -n "$SCRATCH" && -d "$SCRATCH" ]]; then
+        rm -rf "$SCRATCH" 2>/dev/null || true
+    fi
+    exit "$rc"
+}
+trap _cleanup EXIT HUP INT TERM
+
+# ============================================================================
+# Directory-safety helpers
+#
+# _check_dir_safe: read-only check; pushes ok/FAIL into a report array.
+#                  Used from preflight against STATE_DIR and PCR_STATE_DIR.
+#
+# _state_dir_safe: same checks, condensed to a single yes/no return.
+#                  Used at marker-write time to gate every write.
+#
+# Neither function mutates the filesystem.
+# ============================================================================
+
+_check_dir_safe() {
+    local dir="$1" expect_mode="$2" expect_owner="$3"
+    local -n _report_ref="$4"
+    if [[ -L "$dir" ]]; then
+        _report_ref+=("FAIL: ${dir} is a symlink")
+        return 1
+    fi
+    if [[ ! -d "$dir" ]]; then
+        _report_ref+=("FAIL: ${dir} does not exist (install step must create it as ${expect_owner} ${expect_mode})")
+        return 1
+    fi
+    local owner mode
+    owner="$(stat -c '%U:%G' "$dir" 2>/dev/null || true)"
+    mode="$(stat -c '%a' "$dir" 2>/dev/null || true)"
+    local bad=0
+    if [[ "$owner" != "$expect_owner" ]]; then
+        _report_ref+=("FAIL: ${dir} owner=${owner} (expected ${expect_owner})")
+        bad=1
+    fi
+    if [[ "$mode" != "$expect_mode" ]]; then
+        _report_ref+=("FAIL: ${dir} mode=${mode} (expected ${expect_mode})")
+        bad=1
+    fi
+    if [[ ! -w "$dir" ]]; then
+        _report_ref+=("FAIL: ${dir} not writable by current uid")
+        bad=1
+    fi
+    if (( bad == 0 )); then
+        _report_ref+=("ok: ${dir} safe (not symlink, ${expect_owner}, ${expect_mode}, writable)")
+        return 0
+    fi
+    return 1
+}
+
+# Yes/no gate for marker writes. NEVER creates STATE_DIR.
+_state_dir_safe() {
+    [[ ! -L "$STATE_DIR" ]] || return 1
+    [[ -d "$STATE_DIR" ]] || return 1
+    [[ "$(stat -c '%U:%G' "$STATE_DIR" 2>/dev/null)" == "$STATE_DIR_OWNER" ]] || return 1
+    [[ "$(stat -c '%a'   "$STATE_DIR" 2>/dev/null)" == "$STATE_DIR_MODE"  ]] || return 1
+    [[ -w "$STATE_DIR" ]] || return 1
+    return 0
+}
+
+# ============================================================================
+# State helpers
+#
+# Marker writers are best-effort: they check _state_dir_safe at entry, log
+# a warning and return 0 if the directory is unsafe or absent, and only
+# write when the safety profile holds. The helper NEVER creates STATE_DIR.
+# ============================================================================
+
+# Usage: _write_marker_atomic <target_path>  (stdin = marker body)
+# Caller must have already confirmed STATE_DIR is safe.
+_write_marker_atomic() {
+    local target="$1"
+    local tmp
+    tmp="$(mktemp -p "$STATE_DIR" .marker.XXXXXX)"
+    cat > "$tmp"
+    chmod 0600 "$tmp"
+    mv -f "$tmp" "$target"
+}
+
+# Usage: _write_failure_marker <code> <stage> <kver> <detail> [<src_log>]
+# Always returns 0 — inability to persist is logged to journald and the
+# caller's error-path `exit 1` runs regardless.
+_write_failure_marker() {
+    local code="$1" stage="$2" kver="$3" detail="$4" src_log="${5:-}"
+
+    if ! _state_dir_safe; then
+        warn "STATE_DIR ${STATE_DIR} unsafe or absent; failure metadata for stage=${stage} rc=${code} not persisted (journald only)"
+        return 0
+    fi
+
+    local log_target=""
+    if [[ -n "$src_log" && -f "$src_log" ]]; then
+        local tmp
+        if tmp="$(mktemp -p "$STATE_DIR" .last-failure-log.XXXXXX 2>/dev/null)"; then
+            if cat "$src_log" > "$tmp" 2>/dev/null \
+               && chmod 0600 "$tmp" 2>/dev/null \
+               && mv -f "$tmp" "$FAILURE_LOG" 2>/dev/null; then
+                log_target="$FAILURE_LOG"
+            else
+                rm -f "$tmp" 2>/dev/null || true
+                err "could not stage failure log under ${STATE_DIR}"
+            fi
+        else
+            err "could not mktemp under ${STATE_DIR}; failure log not preserved"
+        fi
+    fi
+
+    _write_marker_atomic "$FAILURE_MARKER" <<EOF
+epoch=$(date +%s)
+date=$(date -Iseconds)
+mode=${MODE}
+trigger=${TRIGGER_PKG}
+stage=${stage}
+kver=${kver}
+rc=${code}
+detail=${detail}
+log=${log_target}
+helper_version=${HELPER_VERSION}
+EOF
+    return 0
+}
+
+_write_success_marker() {
+    local kvers="$1" final_pcr11="$2"
+    if ! _state_dir_safe; then
+        warn "STATE_DIR ${STATE_DIR} unsafe or absent; success marker not persisted (journald only)"
+        return 0
+    fi
+    _write_marker_atomic "$SUCCESS_MARKER" <<EOF
+epoch=$(date +%s)
+date=$(date -Iseconds)
+mode=${MODE}
+trigger=${TRIGGER_PKG}
+kernels=${kvers}
+pcr11=${final_pcr11}
+helper_version=${HELPER_VERSION}
+EOF
+    return 0
+}
+
+_write_txn_marker() {
+    local boot_id="$1" ppid="$2" ppid_start="$3"
+    if ! _state_dir_safe; then
+        warn "STATE_DIR ${STATE_DIR} unsafe or absent; txn marker not persisted; dedup will not protect a same-transaction re-invocation"
+        return 0
+    fi
+    _write_marker_atomic "$TXN_MARKER" <<EOF
+boot_id=${boot_id}
+ppid=${ppid}
+ppid_start=${ppid_start}
+epoch=$(date +%s)
+EOF
+    return 0
+}
+
+# ============================================================================
+# Transaction-ID derivation
+#
+# Identity = (boot_id, ppid, ppid_start_jiffies).
+#
+#   boot_id          /proc/sys/kernel/random/boot_id (UUID, changes per boot)
+#   ppid             the actions plugin / shell invoking the helper
+#   ppid_start_jiff  field 22 of /proc/<ppid>/stat (starttime in kernel jiffies)
+#
+# This triple is robust against PID reuse within a boot AND across boots
+# (boot_id catches the latter; starttime catches the former).
+#
+# Field 22 of /proc/<pid>/stat is the 20th field after the closing ") "
+# that terminates the comm field. The "${var##*) }" expansion correctly
+# handles comm fields that contain ")" or whitespace.
+# ============================================================================
+
+_get_txn_id() {
+    local ppid="$1"
+    local boot_id="" ppid_start=""
+    if [[ -r "$BOOT_ID_FILE" ]]; then
+        boot_id="$(< "$BOOT_ID_FILE")"
+    fi
+    if [[ -r "/proc/${ppid}/stat" ]]; then
+        local stat_line rest
+        stat_line="$(< "/proc/${ppid}/stat")"
+        rest="${stat_line##*) }"
+        local -a fields=()
+        read -ra fields <<< "$rest"
+        # Field 22 of /proc/<pid>/stat = field 20 of post-comm tail = index 19.
+        if [[ "${#fields[@]}" -ge 20 ]]; then
+            ppid_start="${fields[19]}"
+        fi
+    fi
+    # | is a safe separator (won't appear in UUID or numeric values).
+    printf '%s|%s|%s\n' "$boot_id" "$ppid" "$ppid_start"
+}
+
+_already_handled() {
+    local cur_boot="$1" cur_ppid="$2" cur_start="$3"
+    [[ -f "$TXN_MARKER" ]] || return 1
+    local prev_boot prev_ppid prev_start
+    prev_boot="$(awk -F= '$1=="boot_id"{print $2}' "$TXN_MARKER" 2>/dev/null || true)"
+    prev_ppid="$(awk -F= '$1=="ppid"{print $2}' "$TXN_MARKER" 2>/dev/null || true)"
+    prev_start="$(awk -F= '$1=="ppid_start"{print $2}' "$TXN_MARKER" 2>/dev/null || true)"
+    [[ -n "$prev_boot" && -n "$prev_ppid" && -n "$prev_start" ]] || return 1
+    [[ "$prev_boot"  == "$cur_boot"  ]] || return 1
+    [[ "$prev_ppid"  == "$cur_ppid"  ]] || return 1
+    [[ "$prev_start" == "$cur_start" ]] || return 1
+    return 0
+}
+
+# ============================================================================
+# Preflight — READ-ONLY checks. Never mutates the filesystem.
+# Used by --self-test and by every real run before lock acquisition.
+# ============================================================================
+
+_preflight() {
+    local rc=0
+    local report=()
+
+    # Required binaries
+    local b
+    for b in "$DRACUT_BIN" "$KERNEL_INSTALL_BIN" "$BOOTCTL_BIN" "$PREDICT_HELPER"; do
+        if [[ -x "$b" ]]; then
+            report+=("ok: $b executable")
+        else
+            report+=("FAIL: $b missing or not executable")
+            rc=1
+        fi
+    done
+
+    # Signing hook present and pinned
+    if [[ -f "$SIGNING_HOOK" ]]; then
+        local hook_sha
+        hook_sha="$(sha256sum "$SIGNING_HOOK" | awk '{print $1}')"
+        if [[ "$hook_sha" == "$SIGNING_HOOK_SHA" ]]; then
+            report+=("ok: ${SIGNING_HOOK} sha matches pinned value")
+        else
+            report+=("FAIL: ${SIGNING_HOOK} sha=${hook_sha} pinned=${SIGNING_HOOK_SHA}")
+            rc=1
+        fi
+    else
+        report+=("FAIL: ${SIGNING_HOOK} missing")
+        rc=1
+    fi
+
+    # /etc/kernel/install.conf: BOOT_ROOT must point at the ESP (read-only)
+    if [[ -f /etc/kernel/install.conf ]]; then
+        if grep -qE '^BOOT_ROOT=/boot/efi[[:space:]]*$' /etc/kernel/install.conf; then
+            report+=("ok: /etc/kernel/install.conf BOOT_ROOT=/boot/efi")
+        else
+            report+=("FAIL: /etc/kernel/install.conf BOOT_ROOT not set to /boot/efi")
+            rc=1
+        fi
+    else
+        report+=("FAIL: /etc/kernel/install.conf missing")
+        rc=1
+    fi
+
+    # /etc/kernel/cmdline must be non-empty (read-only)
+    if [[ -s /etc/kernel/cmdline ]]; then
+        report+=("ok: /etc/kernel/cmdline non-empty")
+    else
+        report+=("FAIL: /etc/kernel/cmdline missing or empty")
+        rc=1
+    fi
+
+    # ESP must be mounted (read-only)
+    if mountpoint -q /boot/efi; then
+        report+=("ok: /boot/efi mounted")
+    else
+        report+=("FAIL: /boot/efi not a mountpoint")
+        rc=1
+    fi
+
+    # machine-id must be present
+    if [[ -s /etc/machine-id ]]; then
+        report+=("ok: /etc/machine-id present")
+        local mid kver uki
+        mid="$(cat /etc/machine-id)"
+        kver="$(uname -r)"
+        uki="/boot/efi/EFI/Linux/${mid}-${kver}.efi"
+        if [[ -f "$uki" ]]; then
+            report+=("ok: current-kernel UKI present at ${uki}")
+        else
+            report+=("warn: current-kernel UKI not yet present at ${uki} (acceptable pre-first-rebuild)")
+        fi
+    else
+        report+=("FAIL: /etc/machine-id missing or empty")
+        rc=1
+    fi
+
+    # State directory: must exist, not be a symlink, root:root, 0700, writable.
+    # Install step creates it — never the helper.
+    if ! _check_dir_safe "$STATE_DIR" "$STATE_DIR_MODE" "$STATE_DIR_OWNER" report; then
+        rc=1
+    fi
+
+    # PCR 11 state directory: same safety profile as STATE_DIR
+    if ! _check_dir_safe "$PCR_STATE_DIR" "$PCR_STATE_DIR_MODE" "$PCR_STATE_DIR_OWNER" report; then
+        rc=1
+    fi
+
+    # Boot-id readable (advisory; affects dedup quality, not correctness)
+    if [[ -r "$BOOT_ID_FILE" ]]; then
+        report+=("ok: ${BOOT_ID_FILE} readable")
+    else
+        report+=("warn: ${BOOT_ID_FILE} not readable; dedup quality degraded")
+    fi
+
+    local line
+    for line in "${report[@]}"; do
+        case "$line" in
+            FAIL:*) err  "${line#FAIL: }" ;;
+            warn:*) warn "${line#warn: }" ;;
+            ok:*)   info "${line#ok: }"   ;;
+            *)      info "$line"           ;;
+        esac
+    done
+
+    return "$rc"
+}
+
+# ============================================================================
+# Kernel enumeration — deterministic order via sort -V
+# ============================================================================
+
+_enumerate_kernels() {
+    find /lib/modules -mindepth 2 -maxdepth 2 -type f -name vmlinuz -printf '%h\n' 2>/dev/null \
+        | sort -V \
+        | while IFS= read -r dir; do
+            basename "$dir"
+        done
+}
+
+# ============================================================================
+# Current-UKI resolution and default-entry sanity check
+# ============================================================================
+
+_resolve_current_uki() {
+    local mid kver uki
+    mid="$(cat /etc/machine-id 2>/dev/null)" || return 1
+    kver="$(uname -r)"
+    uki="/boot/efi/EFI/Linux/${mid}-${kver}.efi"
+    [[ -f "$uki" ]] || return 1
+    printf '%s\n' "$uki"
+}
+
+# Advisory: parses `bootctl status` for the Default Entry line and warns if
+# its basename does not match the MID-prefixed UKI we are about to predict
+# against. bootctl output format drifts across systemd versions, so this is
+# warn-and-proceed, not hard-fail.
+_check_default_entry_consistent() {
+    local mid kver expected
+    mid="$(cat /etc/machine-id 2>/dev/null)" || return 0
+    kver="$(uname -r)"
+    expected="${mid}-${kver}.efi"
+
+    local status
+    if ! status="$("$BOOTCTL_BIN" status 2>/dev/null)"; then
+        warn "bootctl status returned non-zero; cannot verify default entry"
+        return 0
+    fi
+    if grep -Eq "Default Entry:.*${expected}" <<<"$status"; then
+        info "default entry consistent with ${expected}"
+        return 0
+    fi
+    warn "bootctl default entry does not visibly contain ${expected}; PCR11 refresh will target the currently-booted UKI anyway"
+    return 0
+}
+
+# ============================================================================
+# Usage and argument parsing
+# ============================================================================
+
+usage() {
+    cat >&2 <<EOF
+usage: tboot-dnf-helper [--dry-run|--self-test|--version|--help] [<trigger-pkg-name>]
+
+  --self-test  Read-only preflight checks. No lock, no enumeration, no
+               mutation. Exits 0 if all checks pass, 1 otherwise.
+  --dry-run    Acquire lock, enumerate kernels, log the dracut and
+               kernel-install commands that would have run, and the
+               prediction command that would have refreshed PCR 11. Does
+               not touch initramfs, ESP, prediction file, transaction
+               marker, or success marker.
+  --version    Print helper version and exit.
+  --help, -h   This text.
+  (no flag)    Production mode. Refresh initramfs and UKIs, refresh PCR 11
+               prediction, write success marker.
+EOF
+}
+
+# ============================================================================
+# Main
+# ============================================================================
+
+case "${1:-}" in
+    --self-test) MODE="self-test"; shift ;;
+    --dry-run)   MODE="dry-run";   shift ;;
+    --version)   printf '%s %s\n' "$TAG" "$HELPER_VERSION"; exit 0 ;;
+    --help|-h)   usage; exit 0 ;;
+    --*)         err "unknown flag: $1"; usage; exit 2 ;;
+esac
+TRIGGER_PKG="${1:-(none)}"
+
+if [[ "$(id -u)" -ne 0 ]]; then
+    err "must run as root (euid=$(id -u))"
+    exit 1
+fi
+
+info "starting version=${HELPER_VERSION} mode=${MODE} trigger=${TRIGGER_PKG} ppid=${PPID}"
+
+# --- self-test path: no lock, no mutation ---
+if [[ "$MODE" == "self-test" ]]; then
+    if _preflight; then
+        info "self-test: PASS"
+        exit 0
+    else
+        err "self-test: FAIL"
+        exit 1
+    fi
+fi
+
+# --- preflight gates both dry-run and production ---
+if ! _preflight; then
+    err "preflight failed; refusing to proceed"
+    _write_failure_marker 1 "preflight" "(none)" "preflight checks did not pass"
+    exit 1
+fi
+
+# --- acquire lock ---
+exec 9>"$LOCK_FILE"
+if ! flock -w "$LOCK_TIMEOUT" 9; then
+    err "could not acquire lock ${LOCK_FILE} within ${LOCK_TIMEOUT}s"
+    _write_failure_marker 1 "lock" "(none)" "flock -w ${LOCK_TIMEOUT} failed"
+    exit 1
+fi
+info "lock acquired: ${LOCK_FILE}"
+
+# --- in-transaction dedup (production only; dry-run never writes the marker) ---
+IFS='|' read -r CUR_BOOT CUR_PPID CUR_START < <(_get_txn_id "$PPID")
+DEDUP_USABLE=1
+if [[ -z "$CUR_BOOT" || -z "$CUR_PPID" || -z "$CUR_START" ]]; then
+    DEDUP_USABLE=0
+    warn "could not derive full transaction identity (boot_id=${CUR_BOOT:-?} ppid=${CUR_PPID:-?} start=${CUR_START:-?}); dedup disabled for this run"
+fi
+if [[ "$MODE" == "production" ]] && (( DEDUP_USABLE == 1 )) \
+   && _already_handled "$CUR_BOOT" "$CUR_PPID" "$CUR_START"; then
+    info "dedup: already ran for this dnf transaction (boot=${CUR_BOOT} ppid=${CUR_PPID} start=${CUR_START}); exiting 0"
+    exit 0
+fi
+
+# --- scratch directory on /run (tmpfs) — verified before use ---
+SCRATCH="$(mktemp -d -p /run -t tboot-helper-XXXXXX)"
+chmod 0700 "$SCRATCH"
+
+SCRATCH_FSTYPE="$(stat -f -c '%T' "$SCRATCH")"
+if [[ "$SCRATCH_FSTYPE" != "tmpfs" ]]; then
+    err "scratch dir ${SCRATCH} is on ${SCRATCH_FSTYPE}, not tmpfs — aborting"
+    _write_failure_marker 1 "scratch" "(none)" "scratch dir ${SCRATCH} on ${SCRATCH_FSTYPE}, not tmpfs"
+    exit 1
+fi
+info "scratch on tmpfs: ${SCRATCH}"
+
+# --- enumerate kernels ---
+mapfile -t KVERS < <(_enumerate_kernels)
+if [[ "${#KVERS[@]}" -eq 0 ]]; then
+    err "no kernels found under /lib/modules/*/vmlinuz"
+    _write_failure_marker 1 "enumerate" "(none)" "no kernels enumerated"
+    exit 1
+fi
+info "kernels enumerated (${#KVERS[@]}): ${KVERS[*]}"
+
+# --- dry-run path: print intentions, exit clean, no mutation ---
+if [[ "$MODE" == "dry-run" ]]; then
+    for kver in "${KVERS[@]}"; do
+        info "[DRY-RUN] would run: timeout ${DRACUT_TIMEOUT} ${DRACUT_BIN} --force /boot/initramfs-${kver}.img ${kver}"
+        info "[DRY-RUN] would run: timeout ${KERNEL_INSTALL_TIMEOUT} ${KERNEL_INSTALL_BIN} add ${kver} /lib/modules/${kver}/vmlinuz"
+    done
+    info "[DRY-RUN] would resolve current-kernel UKI (MID + uname -r)"
+    info "[DRY-RUN] would refresh PCR 11 via: timeout ${PREDICT_TIMEOUT} ${PREDICT_HELPER} --store <current-kernel-UKI>"
+    info "[DRY-RUN] complete; no state changed; no markers written"
+    exit 0
+fi
+
+# --- production path: refresh initramfs and UKIs per kernel ---
+for kver in "${KVERS[@]}"; do
+    INITRAMFS_PATH="/boot/initramfs-${kver}.img"
+    DRACUT_LOG="${SCRATCH}/dracut-${kver}.log"
+
+    info "dracut: starting for ${kver}"
+    if timeout "$DRACUT_TIMEOUT" "$DRACUT_BIN" --force "$INITRAMFS_PATH" "$kver" \
+            >"$DRACUT_LOG" 2>&1; then
+        info "dracut: ok for ${kver}"
+    else
+        rc=$?
+        err "dracut failed for ${kver} (rc=${rc})"
+        while IFS= read -r line; do err "  dracut[${kver}]: $line"; done <"$DRACUT_LOG"
+        _write_failure_marker "$rc" "dracut" "$kver" \
+            "dracut --force returned non-zero or timed out" "$DRACUT_LOG"
+        exit 1
+    fi
+
+    KI_LOG="${SCRATCH}/kernel-install-${kver}.log"
+    info "kernel-install add: starting for ${kver}"
+    if timeout "$KERNEL_INSTALL_TIMEOUT" "$KERNEL_INSTALL_BIN" add \
+            "$kver" "/lib/modules/${kver}/vmlinuz" >"$KI_LOG" 2>&1; then
+        info "kernel-install add: ok for ${kver}"
+    else
+        rc=$?
+        err "kernel-install add failed for ${kver} (rc=${rc})"
+        while IFS= read -r line; do err "  kernel-install[${kver}]: $line"; done <"$KI_LOG"
+        _write_failure_marker "$rc" "kernel-install" "$kver" \
+            "kernel-install add returned non-zero or timed out" "$KI_LOG"
+        exit 1
+    fi
+done
+
+# --- PCR 11 prediction refresh ---
+info "resolving current-kernel UKI for PCR 11 refresh"
+CURRENT_UKI="$(_resolve_current_uki || true)"
+if [[ -z "$CURRENT_UKI" || ! -f "$CURRENT_UKI" ]]; then
+    err "current-kernel UKI not resolvable; cannot refresh PCR 11"
+    _write_failure_marker 1 "pcr11-resolve" "$(uname -r)" \
+        "cannot resolve current-kernel UKI from MID+KVER"
+    exit 1
+fi
+info "current-kernel UKI: ${CURRENT_UKI}"
+
+# Advisory check: warn-and-proceed
+_check_default_entry_consistent || true
+
+PREDICT_LOG="${SCRATCH}/predict.log"
+info "predict: starting against ${CURRENT_UKI}"
+if timeout "$PREDICT_TIMEOUT" "$PREDICT_HELPER" --store "$CURRENT_UKI" \
+        >"$PREDICT_LOG" 2>&1; then
+    :
+else
+    rc=$?
+    err "predict failed against ${CURRENT_UKI} (rc=${rc})"
+    while IFS= read -r line; do err "  predict: $line"; done <"$PREDICT_LOG"
+    _write_failure_marker "$rc" "pcr11-predict" "$(uname -r)" \
+        "tboot-predict-pcr11 --store returned non-zero or timed out" "$PREDICT_LOG"
+    exit 1
+fi
+
+FINAL_PCR11="$(awk -F= '/^FINAL_PCR11=/{print $2}' "$PREDICT_LOG" | tail -1)"
+if [[ -z "$FINAL_PCR11" ]]; then
+    err "could not parse FINAL_PCR11 from predict output"
+    while IFS= read -r line; do err "  predict: $line"; done <"$PREDICT_LOG"
+    _write_failure_marker 1 "pcr11-parse" "$(uname -r)" \
+        "no FINAL_PCR11=... line in predict output" "$PREDICT_LOG"
+    exit 1
+fi
+info "predict: ok; FINAL_PCR11=${FINAL_PCR11}"
+info "PCR 11 state file refreshed: ${PCR_STATE_FILE}"
+
+# --- mark transaction handled (only when identity is fully resolved) ---
+if (( DEDUP_USABLE == 1 )); then
+    _write_txn_marker "$CUR_BOOT" "$CUR_PPID" "$CUR_START"
+fi
+_write_success_marker "${KVERS[*]}" "$FINAL_PCR11"
+
+info "completed mode=${MODE} kernels=${#KVERS[@]} pcr11=${FINAL_PCR11}"
+exit 0

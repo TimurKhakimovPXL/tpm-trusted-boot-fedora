@@ -1,0 +1,1 @@
+post_transaction:systemd-boot-unsigned:in:enabled=host-only raise_error=1:/usr/local/sbin/tboot-sbloader-posttrans
