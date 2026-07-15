@@ -15,7 +15,8 @@ status: stable
 
 This module establishes **system identity**. Before a disk can be unlocked based on system state, the system must produce a deterministic, tamper-evident representation of itself. That representation is the UKI, and the mechanism that records it is the TPM.
 
-> [!summary] Module 1 in One Line
+> [!NOTE]
+> **Module 1 in One Line**
 > Bundle the entire boot environment into one signed, measurable unit so the TPM can produce a cryptographic fingerprint of exactly what booted.
 
 ---
@@ -53,7 +54,8 @@ The initramfs provides the tools and context to handle all of this.
 4. Control transfers to the real OS via `switch_root` / `pivot_root`
 5. initramfs unmounts and is discarded from memory
 
-> [!important] Common Misconception
+> [!IMPORTANT]
+> **Common Misconception**
 > Neither the kernel nor the initramfs itself unlocks the disk. The initramfs **loads the userspace tools** (`systemd-cryptsetup`, `cryptsetup`) that perform the unlock. The initramfs is the environment; the tools inside it do the work.
 
 **Correct mental model:** The kernel has the drivers but not the map. The initramfs provides the map — where root lives, how to unlock it, and which device to trust.
@@ -82,7 +84,8 @@ A **UKI** is a single UEFI-executable PE binary that bundles all boot components
 
 **Built with:** `ukify`, `dracut`, or `mkosi`
 
-> [!note] The Atomic Guarantee
+> [!NOTE]
+> **The Atomic Guarantee**
 > A UKI is all-or-nothing. You cannot modify the initramfs without invalidating the kernel's signature. You cannot change the cmdline without producing a different TPM measurement. Every component is cryptographically bound to every other.
 
 ### 2.2 Classical Boot vs UKI Boot
@@ -132,7 +135,8 @@ Everything boots together, or nothing boots.
 - Measures boot phase markers (enter-initrd, leave-initrd, ready) into PCR 11
 - Hands off execution to the kernel
 
-> [!important] PCR 11 Measurement Detail
+> [!IMPORTANT]
+> **PCR 11 Measurement Detail**
 > For each PE section, systemd-stub performs **two** TPM extends:
 > 1. The section **name** in ASCII (with trailing NUL) → PCR 11
 > 2. The section **binary content** → PCR 11
@@ -157,7 +161,8 @@ $$PCR_{new} = HASH(PCR_{old} \mathbin\| NewData)$$
 
 This hash-chaining means PCR values are append-only digests of all prior measurements. They reset only on TPM reset or power-on.
 
-> [!tip] Mental Model
+> [!TIP]
+> **Mental Model**
 > Think of the TPM as a flight recorder (black box). It passively records everything that happens from power-on. It does not verify or approve anything — it only records. The policy engine reads the recording and decides.
 
 ### 4.2 PCR Registry (UAPI.7)
@@ -181,10 +186,12 @@ The Linux TPM PCR Registry defines which component measures into which register 
 
 **PCRs used in this project's policy:** PCR 7 (Secure Boot state) and PCR 11 (UKI identity).
 
-> [!note] Shim Elimination Advantage
+> [!NOTE]
+> **Shim Elimination Advantage**
 > This project uses systemd-boot directly without shim. As a result, PCR 14 (`shim-policy`) remains at its initial zero value and is stable — one fewer variable in the trust equation.
 
-> [!warning] PCR Stability Considerations
+> [!WARNING]
+> **PCR Stability Considerations**
 > - PCR 0, 2: change with firmware updates. Do not use for direct long-lived binding.
 > - PCR 9: highly volatile on systems with frequent dracut regeneration. Avoid for direct binding.
 > - PCR 7: stable until Secure Boot key rotation. Good anchor.
@@ -202,7 +209,8 @@ These two mechanisms are often confused. They are complementary, not redundant.
 | **Acts on** | Pre-execution | During and after execution |
 | **Enforces** | What is allowed to boot | What state the system is in |
 
-> [!important] The Combined Guarantee
+> [!IMPORTANT]
+> **The Combined Guarantee**
 > Secure Boot ensures only your signed UKI can execute. TPM records exactly what that UKI contained. Together they mean: the disk only unlocks when your specific, unmodified, signed software ran.
 
 ---
@@ -254,6 +262,6 @@ The UKI is not just a packaging convenience. It is the mechanism that makes the 
 
 ## Related Notes
 
-- [[00_Introduction|Introduction — Architecture Overview]]
-- [[02_Forward_Sealing|Module 2 — Forward Sealing]]
-- [[03_Disk_Encryption_and_Policy_Enforcement|Module 3 — Disk Encryption and Policy Enforcement]]
+- [Introduction — Architecture Overview](00_Introduction.md)
+- [Module 2 — Forward Sealing](02_Forward_Sealing.md)
+- [Module 3 — Disk Encryption and Policy Enforcement](03_Disk_Encryption_and_Policy_Enforcement.md)

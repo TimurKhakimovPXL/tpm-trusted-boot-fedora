@@ -25,7 +25,8 @@ Module 4 addresses:
 - How recovery works when the TPM path fails
 - How the system is safely decommissioned
 
-> [!summary] The Core Principle
+> [!NOTE]
+> **The Core Principle**
 > The system no longer depends on trust in people. It depends on cryptographic authority with governed lifecycle control.
 
 ---
@@ -113,7 +114,7 @@ Phase 3 — Remove old key
      systemd-cryptenroll /dev/nvme0n1p3 --wipe-slot=<old-slot-number>
 ```
 
-> [!warning]
+> [!WARNING]
 > Never remove the old keyslot until the new one is verified working on the target system. Removing it prematurely causes permanent lockout.
 
 The `--wipe-slot=tpm2` shorthand removes all existing TPM2 slots and can be used for atomic replacement in one operation when re-enrolling from scratch.
@@ -153,7 +154,8 @@ All signing operations must produce immutable, timestamped audit logs. Without t
 
 ## 4.4 Disaster Recovery
 
-> [!warning] Mandatory Recovery Keyslot
+> [!WARNING]
+> **Mandatory Recovery Keyslot**
 > Every LUKS2 volume with a TPM2 keyslot must also have an independent recovery credential — a high-entropy passphrase or offline recovery key stored in a secure vault. Red Hat explicitly requires this for all TPM-backed LUKS configurations.
 >
 > A disk with only a TPM2 keyslot is a disk you can permanently lose access to. Firmware updates, Secure Boot key rotation, TPM replacement, or PCR policy drift can all cause TPM unlock to fail.
@@ -239,7 +241,7 @@ All signing operations must produce immutable, append-only log entries containin
 | Timestamp | Establishes timeline for forensic review |
 | Signing key ID | Identifies which key performed the signing |
 
-> [!important]
+> [!IMPORTANT]
 > If you cannot prove what was signed, by which key, and when — you do not have governance. You have the appearance of governance.
 
 Audit logs must be stored outside the CI system so that a compromised runner cannot alter its own history.
@@ -254,7 +256,7 @@ Forward sealing supports rollback prevention. To deny access to a deprecated or 
 - Remove any existing `.pcrsig` for that version from the system
 - Maintain a version whitelist — only currently signed PCR values are authorised
 
-> [!note]
+> [!NOTE]
 > Rollback support (allowing older versions to boot) is achieved by keeping multiple valid `.pcrsig` files on the system — one per authorised UKI version. `systemd-cryptsetup` will try each signature until one matches the current PCR state. Remove a signature to revoke that version's access.
 
 ---
@@ -321,7 +323,7 @@ Module 4 → GOVERNANCE
 
 ## Related Notes
 
-- [[00_Introduction|Introduction — Architecture Overview]]
-- [[01_Unified_Kernel_Image|Module 1 — UKI and Measurement]]
-- [[02_Forward_Sealing|Module 2 — Forward Sealing]]
-- [[03_Disk_Encryption_and_Policy_Enforcement|Module 3 — Disk Encryption and Policy Enforcement]]
+- [Introduction — Architecture Overview](00_Introduction.md)
+- [Module 1 — UKI and Measurement](01_Unified_Kernel_Image.md)
+- [Module 2 — Forward Sealing](02_Forward_Sealing.md)
+- [Module 3 — Disk Encryption and Policy Enforcement](03_Disk_Encryption_and_Policy_Enforcement.md)

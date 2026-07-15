@@ -85,8 +85,8 @@ Tokens:
 Keyslot 0 is the passphrase recovery anchor (argon2id). Keyslot 1 is bound via
 TPM2 token 0 to the split policy: PCR 7 static (`tpm2-hash-pcrs: 7`) and PCR 11
 via the signed public key (`tpm2-pubkey-pcrs: 11`), in the sha256 bank, with the
-SRK as primary key. Note that `tpm2-primary-alg: ecc` refers to the storage root
-key; the *policy* key used for the PCR 11 signature is RSA.
+SRK as primary key. The `tpm2-primary-alg: ecc` refers to the storage root key; the policy key
+used for the PCR 11 signature is RSA.
 
 ### 1.4 Evidence that the TPM (not the passphrase) unlocked
 
@@ -112,8 +112,8 @@ the sealed prediction (§1.2). Together these show the TPM released the key.
 
 The PCR 11 value changed with every substantive change to the boot path. Each
 time, the chain predicted and re-sealed the new value in advance, and each time
-the runtime value after reboot matched the prediction exactly. That is the core
-proof that forward sealing and the automation work: a change does not break
+the runtime value after reboot matched the prediction exactly. This is the main
+evidence that forward sealing and the automation work: a change does not break
 unlocking, because the new state is signed ahead of time.
 
 ```text

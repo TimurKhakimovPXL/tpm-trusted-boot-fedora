@@ -15,7 +15,8 @@ This project implements a **hardware-backed trusted boot chain** for Linux syste
 
 The chain guarantees that disk encryption keys are only released when the system boots in a cryptographically verified, unmodified configuration. Any tampering with the kernel, initramfs, boot parameters, or Secure Boot policy causes the system to deny access to protected data.
 
-> [!summary] One-Sentence Definition
+> [!NOTE]
+> **One-Sentence Definition**
 > A system where the hardware itself decides whether the software is trustworthy enough to access the encrypted disk.
 
 ---
@@ -33,12 +34,15 @@ Module 4 → Governance     (Control Over Time)
 
 | Module | Role | Core Question |
 |--------|------|---------------|
-| [[01_Unified_Kernel_Image\|Module 1]] | Identity | What exactly booted? |
-| [[02_Forward_Sealing\|Module 2]] | Authorization | Is this boot state approved? |
-| [[03_Disk_Encryption_and_Policy_Enforcement\|Module 3]] | Enforcement | Who is allowed to authorize unlocking? |
-| [[04_Governance_Recovery_Lifecycle\|Module 4]] | Governance | Who controls the authority, and for how long? |
+| [Module 1](01_Unified_Kernel_Image.md) | Identity | What exactly booted? |
+| [Module 2](02_Forward_Sealing.md) | Authorization | Is this boot state approved? |
+| [Module 3](03_Disk_Encryption_and_Policy_Enforcement.md) | Enforcement | Who is allowed to authorize unlocking? |
+| [Module 4](04_Governance_Recovery_Lifecycle.md) | Governance | Who controls the authority, and for how long? |
 
-> [!important] The Distinction Between Modules 1–3 and Module 4
+The project README describes a five-layer stack: layer 1 (the custom Secure Boot key setup) is a build-time prerequisite here, and layers 2 to 5 map to Modules 1 to 4.
+
+> [!IMPORTANT]
+> **The Distinction Between Modules 1–3 and Module 4**
 > **Without Module 4:** The system enforces trust technically.
 > **With Module 4:** The organisation governs trust operationally.
 >
@@ -63,8 +67,9 @@ Module 4 → Governance     (Control Over Time)
 - Post-boot access control (PAM, sudo, SELinux)
 - Physical security of the hardware itself
 
-> [!warning] Physical Access Threat Model
-> TPM-based disk unlock with no user interaction means a powered-on device with physical access reaches a decrypted disk. For high-value targets, combine with `--tpm2-with-pin` or a network-bound key (Tang/NBDE). See [[04_Governance_Recovery_Lifecycle#TPM PIN and Physical Access|Module 4]].
+> [!WARNING]
+> **Physical Access Threat Model**
+> TPM-based disk unlock with no user interaction means a powered-on device with physical access reaches a decrypted disk. For high-value targets, combine with `--tpm2-with-pin` or a network-bound key (Tang/NBDE). See [Module 4](04_Governance_Recovery_Lifecycle.md).
 
 ---
 
@@ -93,7 +98,7 @@ System boots
 
 ## Related Notes
 
-- [[01_Unified_Kernel_Image|Module 1 — UKI and Measurement]]
-- [[02_Forward_Sealing|Module 2 — Forward Sealing]]
-- [[03_Disk_Encryption_and_Policy_Enforcement|Module 3 — Disk Encryption and Policy Enforcement]]
-- [[04_Governance_Recovery_Lifecycle|Module 4 — Governance, Recovery, and Lifecycle]]
+- [Module 1 — UKI and Measurement](01_Unified_Kernel_Image.md)
+- [Module 2 — Forward Sealing](02_Forward_Sealing.md)
+- [Module 3 — Disk Encryption and Policy Enforcement](03_Disk_Encryption_and_Policy_Enforcement.md)
+- [Module 4 — Governance, Recovery, and Lifecycle](04_Governance_Recovery_Lifecycle.md)

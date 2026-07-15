@@ -27,3 +27,13 @@ internal lab documents that are **not included in this repository**: they track
 live lab state (current PCR values, snapshot lineage, Proxmox host
 configuration) and are not needed to understand the published architecture or
 findings.
+
+## Signing authority: pipeline model vs local hook
+
+The architecture chapters (02, 03, 04) describe the signing authority
+generically as a CI/CD pipeline holding the policy private key. The validated
+lab implementation uses the local-hook variant instead: the `kernel-install`
+hook and the `libdnf5-actions` chain in `dnf-actions/` sign on the machine at
+update time. Chapter 05 compares the two models directly (see the "Who signs"
+table there); the security roles are identical, only the place where signing
+happens differs.

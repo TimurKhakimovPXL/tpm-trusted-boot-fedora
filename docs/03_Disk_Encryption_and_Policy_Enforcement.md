@@ -15,7 +15,8 @@ status: stable
 
 Modules 1 and 2 establish what the system is (UKI identity) and what future states are approved (forward sealing). This module addresses enforcement: **who is permanently authorised to approve those states**, and how that authority is written into the disk itself.
 
-> [!summary] Module 3 in One Line
+> [!NOTE]
+> **Module 3 in One Line**
 > Enroll the policy public key into the LUKS2 header so the disk will only unlock for TPM sessions authorised by your CI/CD pipeline's signing key.
 
 ---
@@ -48,15 +49,18 @@ systemd-cryptenroll /dev/nvme0n1p3 \
   --tpm2-public-key-pcrs=11
 ```
 
-> [!important] Asymmetric PCR treatment
+> [!IMPORTANT]
+> **Asymmetric PCR treatment**
 > The two PCRs are bound differently because they have different change frequencies:
 > - **PCR 7** is the Secure Boot policy value. It is stable across the system's lifetime; runtime changes indicate SB key rotation, which is itself a governance event requiring re-enrollment. Static binding is appropriate.
 > - **PCR 11** changes on every UKI rebuild (kernel update, initramfs change, cmdline change). Static binding would require manual re-enrollment after every update, defeating the purpose of forward sealing. Signed-policy binding lets the policy key authorise future PCR 11 values.
 
-> [!warning] `--tpm2-signature` is intentionally omitted
+> [!WARNING]
+> **`--tpm2-signature` is intentionally omitted**
 > The kernel-install hook signs PCR 11 for the `enter-initrd` phase, which produces a value that does not match the post-`ready` runtime state. `systemd-cryptenroll --tpm2-signature` validates the signature against the **current** PCR state (post-`ready`), so passing it produces a false-negative dry-run failure (`Failed to unseal secret using TPM2: No such device or address`). Boot-time unlock works correctly because `systemd-cryptsetup` runs in initrd context, where the signed PCR 11 value is the one the TPM observes. The trade-off is that enrollment does not pre-validate that the next boot will TPM-unlock; this is mitigated by retaining the passphrase keyslot 0 as recovery anchor and validating end-to-end through a reboot test. See `06F` finding G.1.
 
-> [!important] PCR list must match the signature
+> [!IMPORTANT]
+> **PCR list must match the signature**
 > `--tpm2-public-key-pcrs=` must exactly match the PCR list covered by the embedded `.pcrsig` entry. The hook's `--phases=enter-initrd` signature has `pcrs=[11]`; demanding `7+11` here has no matching signature entry and unseal fails. Combining `--tpm2-pcrs=7` (for the static PCR) with `--tpm2-public-key-pcrs=11` (for the signed PCR) is the only valid shape for this hook. See `06F` finding G.1.
 
 ---
@@ -67,7 +71,8 @@ systemd-cryptenroll /dev/nvme0n1p3 \
 
 PCRs live inside the TPM chip — not on the disk. They store accumulated hash measurements of everything that has run since power-on.
 
-> [!tip] Scoreboard Analogy
+> [!TIP]
+> **Scoreboard Analogy**
 > Think of PCRs as a security scoreboard. From the moment the power button is pressed, each component that executes adds its hash to the running total. By the time disk unlock is requested, the scoreboard contains a cryptographic fingerprint of the entire boot sequence.
 
 **Extension formula:**
@@ -85,7 +90,8 @@ Values can only be extended, never overwritten. They reset only on TPM reset or 
 
 By the time `systemd-cryptsetup` requests the disk key, PCR 7 and PCR 11 together encode: which Secure Boot policy is active, and exactly which UKI ran.
 
-> [!note] PCR 15 — System Identity (Conditional Addition)
+> [!NOTE]
+> **PCR 15 — System Identity (Conditional Addition)**
 > PCR 15 (`system-identity`) measures machine ID, root filesystem UUID, and LUKS metadata. Including it in the policy provides protection against filesystem confusion attacks — where an attacker swaps GPT partitions or duplicates UUIDs to trick the unlock mechanism.
 >
 > In the split-policy model used by this project, PCR 15 must be **deliberately assigned to either the static PCR policy path or the signed-policy path**, not both:
@@ -182,7 +188,8 @@ cryptroot UUID=<luks-partition-uuid> none discard,tpm2-device=auto
 
 When systemd encounters this during initramfs startup, it spawns `systemd-cryptsetup@cryptroot.service`, which executes the unlock sequence above.
 
-> [!important] The PCR policy lives in the LUKS2 token, not in crypttab
+> [!IMPORTANT]
+> **The PCR policy lives in the LUKS2 token, not in crypttab**
 > The PCR list is **not** duplicated in `/etc/crypttab`. The enrolled `systemd-tpm2` token in the LUKS2 header is the source of truth:
 >
 > - `tpm2-hash-pcrs: 7` (statically bound)
@@ -191,7 +198,8 @@ When systemd encounters this during initramfs startup, it spawns `systemd-crypts
 >
 > The crypttab option `tpm2-device=auto` is sufficient — it tells `systemd-cryptsetup` to look up the TPM2 token and use whatever PCR configuration was committed at enrollment time. Specifying `tpm2-pcrs=` or `tpm2-public-key-pcrs=` in crypttab would create a second source of truth that can drift from the LUKS token; the systemd convention is to keep the policy on the token where it lives with the keyslot it protects.
 
-> [!note] Initramfs propagation
+> [!NOTE]
+> **Initramfs propagation**
 > Edits to `/etc/crypttab` do not automatically reach the boot path. The validated kernel-install hook reads `/boot/initramfs-${KVER}.img` as the source of `--initrd=` for `ukify build`. `kernel-install add` under UKI layout does not refresh that file when the kernel is already installed. Operators must run `dracut --force /boot/initramfs-${KVER}.img ${KVER}` **before** `kernel-install add`, then verify the embedded UKI initrd contains the new option via `lsinitrd`. See `06F` finding G.2 and `06B` Step 24.
 
 ---
@@ -221,7 +229,8 @@ The disk does not trust the system. It trusts the key. The key trusts the pipeli
 
 ## 7. Recovery Keyslot — Mandatory
 
-> [!warning] Always Maintain a Recovery Keyslot
+> [!WARNING]
+> **Always Maintain a Recovery Keyslot**
 > A disk with only a TPM2 keyslot is a disk you can permanently lose access to. Firmware updates, TPM replacement, Secure Boot key rotation, and PCR policy changes can all cause TPM unlock to fail.
 >
 > Red Hat explicitly mandates a recovery passphrase for all TPM-backed LUKS configurations. Treat this as a hard requirement, not an optional extra.
@@ -231,13 +240,13 @@ The disk does not trust the system. It trusts the key. The key trusts the pipeli
 systemd-cryptenroll /dev/nvme0n1p3 --password
 ```
 
-Store the recovery credential in an offline vault or escrow system. See [[04_Governance_Recovery_Lifecycle#4.5 Disaster Recovery|Module 4 — Disaster Recovery]] for full recovery procedures.
+Store the recovery credential in an offline vault or escrow system. See [Module 4 — Disaster Recovery](04_Governance_Recovery_Lifecycle.md) for full recovery procedures.
 
 ---
 
 ## Related Notes
 
-- [[00_Introduction|Introduction — Architecture Overview]]
-- [[01_Unified_Kernel_Image|Module 1 — UKI and Measurement]]
-- [[02_Forward_Sealing|Module 2 — Forward Sealing]]
-- [[04_Governance_Recovery_Lifecycle|Module 4 — Governance, Recovery, and Lifecycle]]
+- [Introduction — Architecture Overview](00_Introduction.md)
+- [Module 1 — UKI and Measurement](01_Unified_Kernel_Image.md)
+- [Module 2 — Forward Sealing](02_Forward_Sealing.md)
+- [Module 4 — Governance, Recovery, and Lifecycle](04_Governance_Recovery_Lifecycle.md)

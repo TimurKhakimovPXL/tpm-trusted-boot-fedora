@@ -19,7 +19,8 @@ Modules 1–4 define the architecture and its governance model. This module addr
 
 Two distinct workflows exist depending on how the OS is managed. Both are covered here.
 
-> [!summary] The Problem in One Sentence
+> [!NOTE]
+> **The Problem in One Sentence**
 > Every UKI rebuild produces a new PCR 11. Without a valid `.pcrsig` for that new value, the TPM refuses to release the disk key on the next boot.
 
 ---
@@ -86,7 +87,8 @@ systemd-measure sign \
 shred -u /tmp/tpm2-pcr-private-key-unsealed.pem
 ```
 
-> [!note] What This Protects Against
+> [!NOTE]
+> **What This Protects Against**
 > Offline disk theft — the encrypted key file is useless without the TPM. It does not protect against a fully compromised running OS, since the OS can request the unseal operation from the TPM while the system is running.
 
 ---
@@ -111,7 +113,8 @@ systemd-measure sign \
   --output=/usr/lib/systemd/tpm2-pcr-signature.json
 ```
 
-> [!important] Version Requirement
+> [!IMPORTANT]
+> **Version Requirement**
 > `--private-key-source=` is available from systemd v256 onwards. Verify your distribution ships a sufficient version before relying on PKCS#11 signing in the hook.
 
 **Operational implication:** The HSM must be physically present when `dnf upgrade` runs. Without it, the signing step fails. For sensitive environments, this is a deliberate control — a new boot state cannot be authorised without physical admin presence.
@@ -307,7 +310,7 @@ Current image  → .pcrsig A → valid → unlocks
 Rollback image → .pcrsig B → valid → also unlocks
 ```
 
-Rollback protection (preventing revert to a vulnerable image) is enforced by removing the old `.pcrsig`. Without a valid signature, the old image cannot unlock the disk even if it boots. See [[04_Governance_Recovery_Lifecycle#4.7 Rollback and Version Control|Module 4 — Rollback and Version Control]].
+Rollback protection (preventing revert to a vulnerable image) is enforced by removing the old `.pcrsig`. Without a valid signature, the old image cannot unlock the disk even if it boots. See [Module 4 — Rollback and Version Control](04_Governance_Recovery_Lifecycle.md).
 
 ---
 
@@ -362,7 +365,8 @@ The requirement for physical presence is a feature in sensitive environments: no
 
 ## 7. The One Rule That Applies to All Workflows
 
-> [!warning] Recovery Keyslot Is Mandatory
+> [!WARNING]
+> **Recovery Keyslot Is Mandatory**
 > If the signing hook fails, the HSM is lost, the signing service is unreachable, or anything breaks the `.pcrsig` chain — the recovery keyslot is the only way back in.
 >
 > Enroll a high-entropy recovery passphrase at provisioning time and store it in an offline vault or escrow system. Without it, any failure in the signing workflow results in a permanently locked disk.
@@ -372,13 +376,13 @@ The requirement for physical presence is a feature in sensitive environments: no
 systemd-cryptenroll /dev/nvme0n1p3 --password
 ```
 
-See [[04_Governance_Recovery_Lifecycle#4.4 Disaster Recovery|Module 4 — Disaster Recovery]] for full recovery procedures.
+See [Module 4 — Disaster Recovery](04_Governance_Recovery_Lifecycle.md) for full recovery procedures.
 
 ---
 
 ## Related Notes
 
-- [[00_Introduction|Introduction — Architecture Overview]]
-- [[02_Forward_Sealing|Module 2 — Forward Sealing]]
-- [[03_Disk_Encryption_and_Policy_Enforcement|Module 3 — Disk Encryption and Policy Enforcement]]
-- [[04_Governance_Recovery_Lifecycle|Module 4 — Governance, Recovery, and Lifecycle]]
+- [Introduction — Architecture Overview](00_Introduction.md)
+- [Module 2 — Forward Sealing](02_Forward_Sealing.md)
+- [Module 3 — Disk Encryption and Policy Enforcement](03_Disk_Encryption_and_Policy_Enforcement.md)
+- [Module 4 — Governance, Recovery, and Lifecycle](04_Governance_Recovery_Lifecycle.md)

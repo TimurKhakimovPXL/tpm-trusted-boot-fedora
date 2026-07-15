@@ -20,7 +20,8 @@ last-updated: 2026-05-29
 
 Operator orientation for the trusted boot lab rebuild: the mental models, the build sequence, and the per-component context that help a human understand *what* each part of `06B_Golden_Path_Rebuild_Runbook.md` is doing and *why* it is shaped that way — without re-deriving the theory that already lives in the architecture modules.
 
-> [!important] This file is not on the execution path
+> [!IMPORTANT]
+> **This file is not on the execution path**
 > Nothing here is required to rebuild the lab. `06B` is self-contained and carries every command, expected result, stop condition, snapshot, and dangerous-mistake guard. This file is read-alongside context only. The deep architecture lives in `01`–`05`; failure and forensic detail lives in `06F`; current values and lineage live in `00_Current_Project_State.md`.
 
 ---

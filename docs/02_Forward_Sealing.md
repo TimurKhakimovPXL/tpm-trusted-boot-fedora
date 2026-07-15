@@ -15,7 +15,8 @@ status: stable
 
 Module 1 established that the TPM records a cryptographic fingerprint of what booted. This module addresses the problem that fingerprint changes with every OS update — and explains how to authorize future system states without requiring manual re-enrollment of the LUKS volume after each update.
 
-> [!summary] Module 2 in One Line
+> [!NOTE]
+> **Module 2 in One Line**
 > Replace static PCR binding with signature-based authorization so that approved OS updates can unlock the disk without breaking encryption.
 
 ---
@@ -65,7 +66,8 @@ These two tools are frequently confused. Their roles are complementary and non-i
 
 Forward sealing works because these two values must match. `systemd-measure` computes what PCR 11 *will be*. `systemd-stub` produces what PCR 11 *is*. If the UKI was not tampered with, they are identical.
 
-> [!important] Why Both Are Needed
+> [!IMPORTANT]
+> **Why Both Are Needed**
 > `systemd-measure` alone cannot be trusted — it runs offline and could be fed arbitrary inputs. `systemd-stub` alone cannot authorize future states — it only measures what is currently booting.
 >
 > Forward sealing requires both: `systemd-measure` predicts and signs authorized future states; `systemd-stub` proves the running state is one of them.
@@ -103,7 +105,8 @@ Step 4: Embed or ship the signature
         Option B: Ship tpm2-pcr-signature.json to /usr/lib/systemd/
 ```
 
-> [!note] Signature Storage Options
+> [!NOTE]
+> **Signature Storage Options**
 > Embedding the `.pcrsig` inside the UKI keeps the signature self-contained and is preferred for standalone deployments. Shipping it as an external JSON file (`/usr/lib/systemd/tpm2-pcr-signature.json`) is useful when signatures are managed separately from images, such as in fleet deployments with rolling updates.
 
 ### 3.2 Boot-Time Process (On the Device)
@@ -159,7 +162,8 @@ When systemd sees this entry, it starts `systemd-cryptsetup@cryptroot.service`.
 | 5. Release | If both checks pass, TPM releases the sealed secret |
 | 6. Unlock | Secret passed to dm-crypt; disk mapped |
 
-> [!important] systemd-cryptsetup Is the Bridge
+> [!IMPORTANT]
+> **systemd-cryptsetup Is the Bridge**
 > Without it, the TPM cannot unlock LUKS. Without it, forward sealing has no runtime enforcement. It connects every component in the chain: TPM policy, LUKS keyslot, PCR signature, and kernel dm-crypt.
 
 ---
@@ -212,17 +216,19 @@ When enrolling a LUKS TPM2 slot with `--tpm2-signature`, `systemd-cryptenroll` v
 
 ## 8. Known Limitations and Risks
 
-> [!warning] TPM Auto-Unlock and Physical Access
+> [!WARNING]
+> **TPM Auto-Unlock and Physical Access**
 > If the disk unlocks from TPM with no user interaction, a powered-on device with physical access gives an attacker a decrypted disk. For high-value targets, add `--tpm2-with-pin=yes` to require a PIN in addition to PCR validation.
 
-> [!warning] Bus Interposer Attacks
+> [!WARNING]
+> **Bus Interposer Attacks**
 > Discrete TPM chips connected via SPI or LPC buses can be subject to hardware interposer attacks that inject fake PCR extends or replay measurement streams. The Linux kernel mitigates this with null-seed HMAC session chaining, but a determined attacker with hardware access and sufficient resources remains a residual risk. Treat TPM-based boot security as one layer of defence-in-depth, not the sole control.
 
 ---
 
 ## Related Notes
 
-- [[00_Introduction|Introduction — Architecture Overview]]
-- [[01_Unified_Kernel_Image|Module 1 — UKI and Measurement]]
-- [[03_Disk_Encryption_and_Policy_Enforcement|Module 3 — Disk Encryption and Policy Enforcement]]
-- [[04_Governance_Recovery_Lifecycle|Module 4 — Governance, Recovery, and Lifecycle]]
+- [Introduction — Architecture Overview](00_Introduction.md)
+- [Module 1 — UKI and Measurement](01_Unified_Kernel_Image.md)
+- [Module 3 — Disk Encryption and Policy Enforcement](03_Disk_Encryption_and_Policy_Enforcement.md)
+- [Module 4 — Governance, Recovery, and Lifecycle](04_Governance_Recovery_Lifecycle.md)
