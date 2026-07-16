@@ -78,6 +78,22 @@ both publication and editable formats:
 - [English thesis report (PDF)](docs/thesis/Timur_Khakimov_TPM_Trusted_Boot_Thesis_EN.pdf)
 - [English thesis source (DOCX)](docs/thesis/source/Timur_Khakimov_TPM_Trusted_Boot_Thesis_EN.docx)
 
+### Where the thesis appendices live
+
+The thesis lists seven appendices, submitted separately with the graded report. Their published counterparts in this repository:
+
+| Thesis appendix | In this repo |
+|---|---|
+| 1 — Build-time architecture diagram | `docs/thesis/figures/figure1_build_time_flow.png` |
+| 2 — Boot-time architecture diagram | `docs/thesis/figures/figure2_boot_time_flow.png` |
+| 3a — kernel-install hook | `hooks/80-tpm2-sign.install` |
+| 3b — first fail-closed chain (UKI) | `dnf-actions/tboot-dnf-posttrans`, `tboot-dnf-helper`, `tboot-predict-pcr11`, `50-tboot-posttrans.actions` |
+| 3c — second fail-closed chain (systemd-boot) | `dnf-actions/tboot-sbloader-posttrans`, `tboot-sbloader-helper`, `60-tboot-sbloader.actions` |
+| 4 — Runtime validation CLI output | `docs/07_Runtime_Validation_Evidence.md` |
+| 5 — Diagnostic Findings Catalog | `docs/06F_Diagnostic_Findings_Catalog.md` |
+| 6 — Attack-scenario results | `docs/08_Attack_Scenarios.md` |
+| 7 — Forensic artifact `bad-objcopy-pcrsig-loaderror.efi` | Write-up in `docs/09_Forensic_Artifact_objcopy_UKI.md`; the firmware-rejected binary itself is not published |
+
 ## Findings along the way
 
 Everything that broke is written up in
