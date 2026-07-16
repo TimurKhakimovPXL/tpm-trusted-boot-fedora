@@ -92,12 +92,18 @@ Evidence status: **residual risk**.
 
 ## D. Future scenario
 
-**D1. Cmdline injection at the boot loader prompt.**
-Attack: the attacker appends `init=/bin/sh` to the kernel cmdline. Defense
-(current policy, PCR 7+11): bypassed — the TPM unlocks under the modified
-cmdline. Defense (proposed, PCR 4+7+11+12): blocked — PCR 12 diverges and the
-policy signature fails. Evidence status: **future**: requires extending the
-policy to PCR 4+7+11+12; not executed in this iteration.
+**D1. External command-line injection in a deployment that permits it.**
+The exact boot-menu attack in which an attacker appends `init=/bin/sh` is not
+reachable in the validated configuration. systemd-boot editing is disabled,
+Secure Boot is enabled, and the UKI contains an embedded `.cmdline`; under
+those conditions systemd-stub does not accept an externally supplied
+replacement command line.
+
+PCR 12 remains relevant for deployment models that intentionally permit
+external command-line arguments, credentials, extensions or add-ons. Binding
+such deployments to PCR 12 is a possible future hardening measure, but this
+must not be presented as a demonstrated bypass of the configuration validated
+here. Evidence status: **future / deployment-dependent**.
 
 ## What is missing
 
@@ -107,7 +113,8 @@ policy to PCR 4+7+11+12; not executed in this iteration.
 - **B1, B2, B3:** the fail-closed guarantees follow from the chain logic and
   were exercised during the gates; standalone per-scenario tamper output was
   not captured as a separate block.
-- **D1 (cmdline injection):** designed but not executed; requires the policy
-  extension to PCR 4+7+11+12 first.
+- **D1 (external command-line inputs):** not applicable to the validated
+  configuration; future testing applies only to deployments that deliberately
+  permit external PCR 12 inputs.
 - **C1:** open residual risk; the mitigation is documented but not captured as
   a test.

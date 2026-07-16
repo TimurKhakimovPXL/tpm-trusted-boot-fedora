@@ -99,9 +99,9 @@ Phase 1 — Prepare new key
   2. Enroll new public key into a second LUKS2 TPM2 keyslot (Slot B)
      systemd-cryptenroll /dev/nvme0n1p3 \
        --tpm2-device=auto \
+       --tpm2-pcrs=7 \
        --tpm2-public-key=new-pcr-public-key.pem \
-       --tpm2-public-key-pcrs=7+11 \
-       --tpm2-signature=new-tpm2-pcr-signature.json
+       --tpm2-public-key-pcrs=11
   3. Verify Slot B unlocks successfully before proceeding
 
 Phase 2 — Transition
@@ -173,9 +173,9 @@ When a motherboard is replaced, the TPM is also replaced. The new TPM has no kno
    systemd-cryptenroll /dev/nvme0n1p3 \
      --wipe-slot=tpm2 \
      --tpm2-device=auto \
+     --tpm2-pcrs=7 \
      --tpm2-public-key=/etc/systemd/tpm2-pcr-public-key.pem \
-     --tpm2-public-key-pcrs=7+11 \
-     --tpm2-signature=/usr/lib/systemd/tpm2-pcr-signature.json
+     --tpm2-public-key-pcrs=11
    ```
 4. Verify TPM unlock works with the new hardware
 5. Retain or remove the recovery key according to policy

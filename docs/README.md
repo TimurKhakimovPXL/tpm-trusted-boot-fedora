@@ -10,7 +10,7 @@ you intend to reproduce the build.
 | `02_Forward_Sealing.md` | PCR 11 signed-policy forward sealing (layer 3) |
 | `03_Disk_Encryption_and_Policy_Enforcement.md` | LUKS2 split policy, PCR 7 + PCR 11 (layer 4) |
 | `04_Governance_Recovery_Lifecycle.md` | Drift detection, fail-closed governance, recovery (layer 5) |
-| `05_Update_Workflows_and_Key_Storage.md` | Update workflows and key custody |
+| `05_Update_Workflows_and_Key_Storage.md` | Validated DNF5 update workflow, systemd-boot signing and key custody |
 | `06B_Golden_Path_Rebuild_Runbook.md` | Full step-by-step rebuild recipe with gates and stop conditions (large file; GitHub may not render it inline — view raw or clone) |
 | `06C_Golden_Path_Operator_Notes.md` | Operator mental models: what each part of 06B does and why |
 | `06F_Diagnostic_Findings_Catalog.md` | Every failure, bug and finding: symptom / root cause / reproduction / fix |

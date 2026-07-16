@@ -162,124 +162,137 @@ This is the recommended model for enterprise fleets. It is also the architecture
 
 ---
 
-## 3. Workflow 1 — Manual Package-Based Updates (dnf upgrade)
+## 3. Workflow 1 — Validated Package-Based Updates with DNF5
 
-### 3.1 How kernel-install Works
+The validated implementation replaces the earlier generic hook and fixed
+package-watch-list examples with the byte-pinned hook, action rules, deciders
+and helpers shipped in this repository.
 
-`kernel-install` is the systemd tool that manages kernel and UKI installation. It runs automatically when a kernel RPM is installed or removed. It reads `/etc/kernel/install.conf` for layout configuration and executes all executable scripts found in `/etc/kernel/install.d/` in lexicographic order.
+### 3.1 Canonical Components
 
-When `layout=uki` is set, `kernel-install` calls `ukify` to produce a new UKI and writes it to the ESP. The signing hook runs after this, as a final install step.
+| Component | Role |
+|---|---|
+| `hooks/80-tpm2-sign.install` | Canonical UKI rebuild and signing authority |
+| `dnf-actions/50-tboot-posttrans.actions` | Runs the boot-input decider after every completed host transaction |
+| `dnf-actions/tboot-dnf-posttrans` | Computes the boot-input manifest and decides whether drift exists |
+| `dnf-actions/tboot-dnf-helper` | Rebuilds initramfs images and invokes `kernel-install` |
+| `dnf-actions/tboot-predict-pcr11` | Independently calculates and stores expected PCR 11 |
+| `dnf-actions/60-tboot-sbloader.actions` | Watches inbound `systemd-boot-unsigned` transactions |
+| `dnf-actions/tboot-sbloader-posttrans` | Decides whether the signed loader state is converged |
+| `dnf-actions/tboot-sbloader-helper` | Signs and safely propagates systemd-boot to the ESP |
 
-### 3.2 The Signing Hook
+The action files are consumed by `libdnf5-plugin-actions`. Deciders determine
+whether work is required; helpers perform the privileged mutations.
 
-```bash
-# /etc/kernel/install.d/99-tpm2-sign.install
-#!/bin/bash
+### 3.2 Canonical UKI Signing Hook
 
-COMMAND="$1"          # add or remove
-KERNEL_VERSION="$2"
-ENTRY_DIR="$3"        # path to the ESP entry directory
+`80-tpm2-sign.install` runs during `kernel-install add` for the UKI layout. It
+does not modify an already signed UKI with `objcopy`, and it does not rely on
+`ukify --join-pcrsig`. Instead, it rebuilds the staged image in one native
+`ukify build` operation using:
 
-# Only act on installation, not removal
-[[ "$COMMAND" == "add" ]] || exit 0
+- the kernel, initramfs, command line and operating-system metadata;
+- the PCR public key and TPM-unsealed RSA private policy key;
+- `--phases=enter-initrd` and the SHA-256 PCR bank; and
+- the Secure Boot `db` key and certificate.
 
-UKI="${ENTRY_DIR}${KERNEL_VERSION}.efi"
+Before the result may replace the staged UKI, the hook verifies the required
+sections, embedded PCR policy, Secure Boot signature, signer count and PE/COFF
+section-layout invariants. The later `90-uki-copy.install` step receives the
+file only after those checks succeed.
 
-# Exit cleanly if UKI does not exist yet
-[[ -f "$UKI" ]] || exit 0
+### 3.3 Boot-Input Drift Detection
 
-systemd-measure sign \
-  --linux="/lib/modules/${KERNEL_VERSION}/vmlinuz" \
-  --initrd="/boot/initramfs-${KERNEL_VERSION}.img" \
-  --osrel="/etc/os-release" \
-  --cmdline="/etc/kernel/cmdline" \
-  --pcrpkey="/etc/systemd/tpm2-pcr-public-key.pem" \
-  --private-key="/etc/systemd/tpm2-pcr-private-key.pem" \
-  --output="/usr/lib/systemd/tpm2-pcr-signature.json"
+The broad action rule runs after every completed host transaction. This is
+intentional: package names alone do not reliably identify changes to measured
+boot inputs.
 
-echo "TPM2 PCR 11 signature updated for kernel ${KERNEL_VERSION}"
+The decider computes a deterministic manifest covering fourteen classes of
+boot-relevant input, including installed kernels and modules, initramfs and
+dracut configuration, firmware, early-boot systemd and udev inputs, storage and
+cryptsetup tooling, the kernel command line, and the public trust artifacts.
+It compares that manifest with a protected baseline:
+
+- Equal manifest: no trusted-boot rebuild is needed.
+- Drift: record the unsafe state and invoke the helper.
+- Missing baseline in normal mode: fail closed instead of silently creating a
+  new trust baseline.
+
+### 3.4 Drift-Rebuild Flow
+
+```text
+DNF transaction completes
+  → libdnf5 action invokes tboot-dnf-posttrans
+    → compute and compare boot-input manifest
+      → unchanged: exit without rebuilding
+      → drift:
+          write UNSAFE-TO-REBOOT sentinel
+          invoke tboot-dnf-helper
+            → rebuild initramfs for each installed kernel
+            → invoke kernel-install add
+              → 80-tpm2-sign.install rebuilds and signs each UKI
+            → independently predict and store expected PCR 11
+          advance the baseline atomically
+          clear the sentinel
 ```
 
-```bash
-chmod +x /etc/kernel/install.d/99-tpm2-sign.install
+The helper does not sign UKIs itself. It creates the conditions under which the
+canonical hook runs and then independently refreshes the expected PCR 11 value.
+The decider advances the baseline only after the helper succeeds.
+
+### 3.5 Failure Semantics
+
+The DNF action executes in `post_transaction`. At that point the RPM database
+and package transaction have already committed. A later signing failure cannot
+roll those package changes back.
+
+Fail-closed therefore means:
+
+- DNF reports the post-transaction failure;
+- the baseline is not advanced;
+- the `UNSAFE-TO-REBOOT` sentinel remains present; and
+- the machine must not reboot until the boot artifacts are repaired.
+
+The sentinel is an operational stop marker, not a machine-enforced reboot
+inhibitor. This workflow does not transactionally roll back RPM changes.
+
+### 3.6 systemd-boot Loader Updates
+
+The UKI chain is not sufficient on its own because the
+`systemd-boot-unsigned` package can replace the bootloader source binary. A
+second action chain handles that package separately:
+
+```text
+systemd-boot-unsigned inbound transaction
+  → 60-tboot-sbloader.actions
+    → tboot-sbloader-posttrans compares the loader manifest
+      → drift or non-converged shape
+        → tboot-sbloader-helper
+          → sign the source binary
+          → test propagation on a throwaway loopback ESP
+          → require both scratch targets to match the signed source
+          → propagate to the real ESP
+          → verify convergence
+        → advance the baseline and clear the sentinel
 ```
 
-Replace the `--private-key` line with the appropriate PKCS#11 or unseal invocation depending on the chosen key storage model.
+The loopback-ESP checkpoint is mandatory. It proves that
+`bootctl --no-variables install` selects and copies the `.efi.signed` file to
+both loader targets before the real ESP is touched.
 
-**What happens on `sudo dnf upgrade` (kernel update):**
+### 3.7 Operational Invariants
 
-```
-dnf installs new kernel RPM
-  → kernel-install add <version> called automatically
-    → dracut rebuilds initramfs for new kernel
-    → ukify assembles new UKI
-    → UKI written to ESP
-    → 99-tpm2-sign.install executes
-      → systemd-measure predicts new PCR 11
-      → .pcrsig signed and written
-  → reboot → new PCR 11 matches new .pcrsig → disk unlocks
-```
+- Only `80-tpm2-sign.install` signs UKIs.
+- Deciders decide; helpers mutate.
+- A missing production baseline is an error, never an implicit prime.
+- Mutation paths mark the machine unsafe to reboot before changing boot state.
+- Baselines advance only after successful convergence.
+- The passphrase recovery keyslot remains available throughout validation.
+- PCR 11 prediction is refreshed without re-enrolling the LUKS keyslot.
 
-For kernel updates, this is fully automated after initial setup.
-
-### 3.3 The NVIDIA Driver Problem
-
-An NVIDIA driver update does not install a new kernel package. It rebuilds the kernel module and triggers dracut to regenerate the initramfs, but does not call `kernel-install add`. The signing hook therefore does not fire. The UKI on the ESP still contains the old initramfs. The new initramfs is on disk but not yet part of the measured boot object.
-
-**Result without intervention:** The system reboots with the old UKI, which does not contain the new NVIDIA driver in its initramfs. The disk unlocks (PCR 11 matches the old `.pcrsig`), but the new driver is not active at boot time.
-
-**Result if the UKI is rebuilt without signing:** PCR 11 changes. No valid `.pcrsig` exists. Lockout.
-
-The fix is to ensure that any initramfs rebuild triggers a UKI rebuild and re-sign. Use a DNF post-transaction plugin:
-
-```python
-# /etc/dnf/plugins/tpm2-resign.py
-import libdnf5.plugin
-import subprocess
-import os
-
-# Packages that rebuild the initramfs but do not install a new kernel
-WATCHED_PACKAGES = {
-    "nvidia-driver",
-    "akmod-nvidia",
-    "kmod-nvidia",
-    "dracut",
-}
-
-class Tpm2ResignPlugin(libdnf5.plugin.IPlugin):
-    def post_transaction(self, ctx):
-        changed = {p.get_name() for p in ctx.get_transaction_packages()}
-        if not changed & WATCHED_PACKAGES:
-            return
-
-        # Rebuild initramfs for all installed kernels
-        subprocess.run(["dracut", "--regenerate-all", "--force"], check=True)
-
-        # Trigger kernel-install for each kernel version
-        # This fires the signing hook via install.d
-        for version in os.listdir("/lib/modules"):
-            vmlinuz = f"/lib/modules/{version}/vmlinuz"
-            if os.path.exists(vmlinuz):
-                subprocess.run(
-                    ["kernel-install", "add", version, vmlinuz],
-                    check=True
-                )
-```
-
-**With this plugin in place, the full automated flow for an NVIDIA update is:**
-
-```
-sudo dnf upgrade nvidia-driver
-  → DNF installs new NVIDIA packages
-  → tpm2-resign.py post_transaction fires
-    → dracut --regenerate-all rebuilds initramfs with new driver
-    → kernel-install add called for each kernel version
-      → ukify assembles new UKI with updated initramfs
-      → 99-tpm2-sign.install fires
-        → systemd-measure signs new PCR 11
-        → .pcrsig written
-  → reboot → disk unlocks → new NVIDIA driver active
-```
+The full installation and validation sequence is in
+`06B_Golden_Path_Rebuild_Runbook.md`. Failure modes and rejected designs are in
+`06F_Diagnostic_Findings_Catalog.md`.
 
 ---
 
