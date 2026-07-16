@@ -1,17 +1,14 @@
 # TPM-Enforced Trusted Boot Chain on Fedora / RHEL
 
-In plain terms, this project allows an encrypted Fedora server to install
-legitimate operating-system updates and still unlock automatically at the next
-boot. The TPM rejects unauthorized boot changes, while approved updates are
-detected, rebuilt, signed and authorized automatically.
-
-My thesis project for the associate degree (graduaat) in System and Network
-Administration at PXL University of Applied Sciences, built with an industry
-partner: a trusted boot chain on Fedora Server 43 that keeps working when you
-update the system. Custom Secure Boot keys, signed Unified Kernel Images, TPM2
-forward sealing and LUKS2 auto-unlock, held together by a DNF actions chain
-that evaluates boot-input drift after every package transaction and rebuilds
-only when necessary. The LUKS keyslot is never re-enrolled.
+This thesis project, completed for the associate degree (graduaat) in System
+and Network Administration at PXL University of Applied Sciences in
+collaboration with Piros, demonstrates how an encrypted Fedora Server 43
+system can install legitimate operating-system updates and retain TPM-backed
+automatic LUKS2 unlock at the next boot. Unauthorized boot changes are
+rejected, while approved updates are detected, rebuilt, signed and authorized
+automatically. The implementation combines custom Secure Boot keys, signed
+Unified Kernel Images, TPM2 forward sealing and a DNF5 actions chain that
+reacts to boot-input drift. The LUKS keyslot is never re-enrolled.
 
 ## Research question and conclusion
 
