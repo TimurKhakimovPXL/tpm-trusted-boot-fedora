@@ -15,15 +15,18 @@ tags:
 module: 6
 category: forensic-catalog
 status: stable
-last-updated: 2026-05-25
+last-updated: 2026-07-16
 ---
 
 # 06F: Diagnostic Findings and Deprecated Procedures
 
-This file is the consolidated reference for everything that went wrong, almost went wrong, or is at risk of going wrong in the trusted boot project. It serves two audiences:
+This catalog records observed failures, near misses and known risks in the
+trusted boot project. It is written for two audiences:
 
-- An operator following `06B_Golden_Path_Rebuild_Runbook.md` who needs to understand *why* a step is the way it is, or who hits an unexpected symptom and wants to pattern-match against known failure modes.
-- A future maintainer auditing the engineering process and asking "is this procedure still safe."
+- Operators following `06B_Golden_Path_Rebuild_Runbook.md` who need the reason
+  behind a step or need to match an unexpected symptom to a known failure.
+- Maintainers auditing the engineering process and checking whether a procedure
+  remains safe.
 
 Every entry has a verdict that tells you whether the procedure described is forbidden, conditionally safe, or just informational context. Entries that document forbidden procedures are marked clearly so they cannot be misread as recommendations.
 
@@ -346,7 +349,11 @@ The hook's stage 10 validation deliberately copies the UKI to a tmpfs scratch pa
 - Evidence: `06_Lab_Setup_Runbook_continuation.md` §16.13 (root cause), §18 (Block B.1 broken-objcopy execution log), `06_Lab_Setup_Runbook_continuation_v2_1_patches.md` §20.5b (forensic reboot record)
 
 **Meta-finding:**
-**`sbverify OK` is not proof of firmware-loadability.** Linux-side validation tools check signature integrity but not layout invariants. Production UKI validation must include either per-section sha256 comparison against a known-good reference, or section-VMA sanity check against the `0x180000000` threshold. This is the single most important lesson from Block B development.
+**`sbverify OK` is not proof of firmware-loadability.** Linux-side validation
+tools check signature integrity but not layout invariants. Production UKI
+validation must include either per-section sha256 comparison against a
+known-good reference or a section-VMA sanity check against the `0x180000000`
+threshold. Block B established this requirement.
 
 ---
 
@@ -391,7 +398,7 @@ ukify build \
   --output=$OUT
 ```
 
-This is the path the validated 80-tpm2-sign hook takes.
+The validated `80-tpm2-sign` hook uses this path.
 
 **Cross-reference:**
 - `06B`: Step 14 (hook stage 7 uses native PCR signing)
@@ -512,7 +519,7 @@ systemd-creds encrypt --tpm2-pcrs=7 --name=tpm2-pcr-signing-key \
 mv /tmp/pubkey-park.pem /etc/systemd/tpm2-pcr-public-key.pem
 ```
 
-This is what `06B` Step 12 does.
+`06B` Step 12 applies this workaround.
 
 **Cross-reference:**
 - `06B`: Step 12 (Block A sealing, with the public-key parking workaround)
@@ -534,7 +541,11 @@ Failed to read system token: No such file or directory
 The decrypt itself succeeds (exit 0, plaintext written), but the stderr noise is visible in the hook's logger output and looks like a failure.
 
 **Root cause:**
-systemd-creds tries to read system credentials from EFI variables and other locations as part of its discovery chain. When some of those sources are absent (which is normal for a pure TPM2 unseal in a hook context), it logs the absence to stderr without making the operation fail. The exit code is the source of truth, not the stderr stream.
+systemd-creds tries to read system credentials from EFI variables and other
+locations as part of its discovery chain. When some of those sources are
+absent, which is normal for a pure TPM2 unseal in a hook context, it logs the
+absence to stderr without making the operation fail. Determine success from the
+exit code, not from the presence of stderr output.
 
 **Fix or workaround:**
 Trust the exit code. Capture stderr if you want to log it, but do not treat non-empty stderr as a failure signal. The validated hook does this correctly.
@@ -618,7 +629,11 @@ The runbook step 17 uses this idiom.
 A `uki.conf` with `[PCRSignature:initial]` containing only `PCRPublicKey=` (no private key, no phases) does not produce a `.pcrsig` section in the resulting UKI. ukify accepts the config and exits 0, but the UKI lacks the section.
 
 **Root cause:**
-This is intentional. Without a private key, ukify cannot sign anything. The `[PCRSignature:NAME]` section with only `PCRPublicKey=` is the *config slot* for a future hook activation. It tells ukify "if a private key is provided at runtime via CLI flags, sign for this profile." The validated hook provides the private key via `--pcr-private-key=` at invocation time; that's when `.pcrsig` actually gets produced.
+Without a private key, ukify cannot create a signature. A
+`[PCRSignature:NAME]` section containing only `PCRPublicKey=` defines the
+profile used when a private key is supplied later through command-line flags.
+The validated hook supplies that key with `--pcr-private-key=` and ukify then
+creates the `.pcrsig` section.
 
 **Fix or workaround:**
 None needed. This is the intended design. The `uki.conf` slot in `06B` Step 7 is shaped this way deliberately so that future hook runs don't have to mutate the config.
@@ -672,7 +687,10 @@ ukify build \
   --output=/boot/efi/EFI/Linux/${KVER}.efi
 ```
 
-This is what `06B` Step 8 does. The CLI flags duplicate values that are also in `uki.conf`; they are not redundant. The `uki.conf` is correctly placed for `kernel-install`-driven runs (Step 16 onward); the explicit flags are necessary for the Phase 1 manual build in Step 8.
+`06B` Step 8 passes these options explicitly. The same values also appear in
+`uki.conf`, but the two copies serve different invocation paths. `uki.conf` is
+used by `kernel-install` from Step 16 onward, while the Phase 1 manual build in
+Step 8 requires the command-line options.
 
 If you want a single config consumed by both paths, write the same content to both `/etc/kernel/uki.conf` and `/etc/systemd/ukify.conf`. The bundle does not do this; the manual Phase 1 path is one-shot, and duplicating the config to keep both in sync long-term is a maintenance burden.
 
@@ -775,7 +793,10 @@ Modern dracut is largely deterministic given the same inputs (same crypttab, sam
 
 Neither operation contributes to the content measured into PCR 11. Only the section payloads do. So an unchanged input chain produces an unchanged PCR 11 value, even when the resulting UKI sha differs.
 
-This is the correct behaviour of a measured-boot system: PCR 11 measures what the firmware and stub will measure at runtime, not the artefact's filesystem-level identity. A value change between regenerations would signal that *something* in the measured-content chain drifted (an initramfs module added or removed, cmdline changed, microcode payload updated, etc.); useful information when it appears.
+This matches the measured-boot design. PCR 11 represents the content measured
+by the firmware and stub at runtime, not the file's identity on disk. A changed
+value between rebuilds indicates a change in the measured-content chain, such
+as an initramfs module, kernel command line or microcode payload.
 
 **Reproduction:**
 
@@ -902,7 +923,9 @@ The shell may also drop to an unresponsive state where every prompt redraw fails
 **Root cause:**
 Fedora's bash configuration (specifically `/etc/profile.d/bash-color-prompt.sh` on Fedora 43) references prompt-related variables such as `PROMPT_START`, `PROMPT_END`, and friends via the `${VAR@P}` parameter expansion. These variables are referenced for prompt assembly *only when the prompt is rendered*, and they may legitimately be unset in some prompt themes. With `set -u` active in an interactive shell, every prompt redraw triggers the unbound-variable trap and either prints the error or aborts the read loop.
 
-This is a known interaction between bash strict mode and prompt-themes that reference variables defensively. It is not a Fedora bug; it is a category error in expecting `set -u` to be safe in an interactive shell.
+Bash strict mode can conflict with prompt themes that reference optional
+variables. The failure is not specific to Fedora. `set -u` is unsuitable for
+this interactive shell configuration.
 
 **Reproduction:**
 
@@ -949,14 +972,16 @@ A heredoc-wrapped validation block that calls `cryptsetup open --test-passphrase
 No key available with this passphrase.
 ```
 
-, but no prompt was actually presented to the operator. The script behaves as if an empty passphrase was supplied.
+No prompt was actually presented to the operator. The script behaves as if an
+empty passphrase was supplied.
 
 **Root cause:**
 `bash <<'EOF' ... EOF` redirects bash's stdin to the heredoc content. The heredoc is fully consumed during script parsing. When a child process (like `cryptsetup`) then reads from stdin during execution, it gets EOF or empty input. `cryptsetup` interprets this as a (empty) passphrase attempt and reports the standard "no key matches" failure.
 
 `set -e` does not abort the script because the failing command was the left operand of `&&`, which is exempted from strict-mode failure per the bash manual.
 
-This is a different symptom from F.4 (`set -u` and prompt redraw); it affects child-process input rather than the parent's prompt rendering.
+Unlike F.4, which concerns prompt rendering under `set -u`, this failure affects
+input read by a child process.
 
 **Reproduction:**
 
@@ -1053,7 +1078,12 @@ systemd-cryptenroll /dev/sda3 \
   --tpm2-public-key-pcrs=11
 ```
 
-The architectural justification (worth including in thesis defense): the asymmetric PCR treatment reflects the differing change frequencies and trust boundaries of the two PCRs. PCR 7 is stable; PCR 11 is rebuild-volatile. Forward sealing is the right tool for the latter and unnecessary for the former. Skipping `--tpm2-signature` skips dry-run validation; the reboot test is the real end-to-end check, and keyslot 0 (passphrase) remains as the recovery anchor throughout.
+The two PCRs have different change rates and trust boundaries. PCR 7 is stable,
+while PCR 11 changes when the measured boot content changes. PCR 7 therefore
+uses static binding and PCR 11 uses signed authorization. Omitting
+`--tpm2-signature` also omits enrollment-time validation, so the reboot test is
+the end-to-end check. Keyslot 0 remains available as the passphrase recovery
+path throughout.
 
 **Operational consequences:**
 The Module 3 design doc (`03_Disk_Encryption_and_Policy_Enforcement.md` §1.2) originally showed `--tpm2-public-key-pcrs=7+11 --tpm2-signature=…` as the example. That example is incompatible with the hook's `--phases=enter-initrd` signing and has been updated to the split-policy form.
@@ -1473,7 +1503,9 @@ Do **not** patch the staged source to work around the harness. Specifically, do 
 - Rename manifest categories to avoid the forbidden tokens. The 14-category structure is part of the Gate 1 design lock.
 - Edit the staged file in place. The staged file's sha256 is the canonical Gate 2 artifact. Mutating it after Step 3 records the sha256 silently invalidates the recorded identity.
 
-The correct resolution is one-directional: when the external harness and the in-script self-scan disagree, the **in-script self-scan is authoritative**, because it is the one that runs at production preflight. Bring the external harness into agreement with the self-scan, not the other way around.
+When the external harness and the in-script self-scan disagree, use the
+**in-script self-scan** as the reference because it runs during production
+preflight. Update the external harness to use the same expression.
 
 Deviation D (the authoritative regex), rendered unambiguously:
 
@@ -1605,7 +1637,8 @@ lrwxrwxrwx. 1 root root 3 May  7 02:50 /usr/local/sbin -> bin
 ```
 `/usr/local/bin` is the real directory; `/usr/local/sbin` is a system-managed legitimate symlink. RPM and `install -d` consolidate any sbin/bin distinction onto the single `/usr/local/bin` inode. B.2.2 silently relied on this resolution (the B.2.2 helper-sha verification still worked because `sha256sum` follows directory-component symlinks transparently); B.2.3 surfaced it because the install-target safety check was tightened to reject symlinks for tampering defense.
 
-This is not a security event; it is the documented Fedora UsrMerge layout. The harness assertion was too strict.
+This is Fedora's documented UsrMerge layout, not a security event. The harness
+assertion was too strict.
 
 **Reproduction:**
 ```bash
@@ -1760,7 +1793,7 @@ $ tboot-dnf-posttrans --prime
 $ echo $?
 11
 ```
-This is correct decider behaviour. It is not appropriate to perform inside the clean Gate 3.6.
+The refusal is expected. Test it outside the clean Gate 3.6 journal window.
 
 **Fix or workaround:**
 Gate 3.6 runs `--prime` exactly once, validates rc=0, validates no err: lines in the journal slice, validates the three state-dir files have correct identity, and stops. The refusal-guard probe belongs in a separate optional error-path validation gate (call it Gate 3.6.X or fold into Gates 4–7), NOT in the clean Gate 3.6.
@@ -2322,7 +2355,7 @@ Together these mean **firmware would accept any of these UKIs at boot if it sele
 | Forensic UKI class | Has `.pcrpkey`/`.pcrsig`? | Expected boot behaviour if selected |
 |---|---|---|
 | **Bare-kver / pre-hook B.1 development artifact** (e.g. `6.19.14-200.fc43.x86_64.efi`) | **No**: both sections absent | Outside the validated forward-sealed path. Firmware accepts (signed by `db.crt`); kernel boots; systemd-stub measures into PCR 11 normally (the extend operation does not require `.pcrsig` to be present); but the runtime PCR 11 will be a different value than any policy-signed prediction. **Expected to fail closed at LUKS unlock**: the policy chain has no signed authorisation for the measured PCR state. Operator sees a passphrase prompt. Fail-safe boundary holds, but the operator does not know whether to roll back or investigate (same symptom as a true Gate 6 failure). |
-| **Test forensic UKI with embedded `.pcrsig`** (e.g. `test-tpm2initrd-pcrsig-*.efi`, `test-ukify-native-pcrsig-*.efi`) | **Yes**: both sections present | Same firmware-acceptance, same kernel boot, same measurement. **MAY unlock LUKS** if the embedded `.pcrpkey` matches the live policy public key the runtime policy chain expects. **This was not proven by the 2026-05-25 audit**: proving it requires extracting `.pcrpkey` from each forensic UKI via `objcopy --dump-section .pcrpkey=/tmp/pcrpkey-$f.pem` (on a read-only copy in tmpfs per `06F` B.1) and comparing against `/etc/systemd/tpm2-pcr-public-key.pem`. If they match: silent boot substitution: the operator may not notice from LUKS behaviour alone that they booted a forensic artifact rather than the validated production UKI. If they don't match: same passphrase-prompt symptom as the bare-kver case. **Do not overclaim**; the verified facts are sbverify + signer count + VMA + section presence + db.crt signature. Whether they would actually unlock is an open question until proven. |
+| **Test forensic UKI with embedded `.pcrsig`** (e.g. `test-tpm2initrd-pcrsig-*.efi`, `test-ukify-native-pcrsig-*.efi`) | **Yes**: both sections present | Same firmware-acceptance, same kernel boot, same measurement. **MAY unlock LUKS** if the embedded `.pcrpkey` matches the live policy public key the runtime policy chain expects. **This was not proven by the 2026-05-25 audit**: verification requires extracting `.pcrpkey` from each forensic UKI via `objcopy --dump-section .pcrpkey=/tmp/pcrpkey-$f.pem` (on a read-only copy in tmpfs per `06F` B.1) and comparing against `/etc/systemd/tpm2-pcr-public-key.pem`. If they match: silent boot substitution: the operator may not notice from LUKS behaviour alone that they booted a forensic artifact rather than the validated production UKI. If they don't match: same passphrase-prompt symptom as the bare-kver case. The verified facts are sbverify + signer count + VMA + section presence + db.crt signature. Whether they would actually unlock remains an open question. |
 
 **This was NOT a B.2.4 Gate 6 blocker.** `bootctl status` at Gate 4, Gate 6A pre-reboot probe, and Gate 6B post-reboot validation all reported Default Entry and Current Entry pointing to the MID-prefixed rebuilt 6.19.14 UKI. `LoaderEntryDefault` correctly persisted across the reboot. The forensic UKIs were menu-visible but not selected. The audit-discipline scope is "boot-surface hygiene" + "preventive inventory contract" + "cleanup procedure", not a remediation of an active Gate 6 failure.
 
@@ -2830,7 +2863,13 @@ A decider that emits `decision=unchanged` whenever the current manifest equals t
 The B.4 decider emits `decision=unchanged` **only if all four hold**: (1) manifest == baseline, (2) `src_signed` ≠ `ABSENT`, (3) `esp_systemd` == `src_signed`, (4) `esp_boot` == `src_signed`. Baseline-equality (condition 1) alone is insufficient; the converged-shape (conditions 2–4) must also hold. Baseline absent in normal mode is a hard FAIL CLOSED (no auto-prime, no helper invocation; the decider tells the operator to run `--prime` in the correct gate). After helper success the decider recomputes, requires converged-shape, advances the baseline, and clears the sentinel.
 
 **Proof (live, 2026-05-28):**
-The primed B.4 baseline is intentionally **non-converged** (`src_signed=ABSENT`): a pre-convergence reference, not an "unchanged safe state." Post-prime, the current manifest equals the baseline (`equal=1`) but the shape is non-converged (`shape=0`), so `--debug-print` reports `would-be decision: drift (equal=1 shape=0)`: never `unchanged`. This is the decisive demonstration that condition 1 alone does not yield a no-op. If post-prime ever read `unchanged`, D-1 is broken.
+The primed B.4 baseline is intentionally **non-converged**
+(`src_signed=ABSENT`). It is a pre-convergence reference, not an unchanged safe
+state. After priming, the current manifest equals the baseline (`equal=1`) but
+the shape remains non-converged (`shape=0`). `--debug-print` therefore reports
+`would-be decision: drift (equal=1 shape=0)`, never `unchanged`. This confirms
+that condition 1 alone does not yield a no-op. If the post-prime result ever
+reads `unchanged`, D-1 is broken.
 
 **Fix or workaround:**
 The decider source enforces D-1 in `evaluate()` / `_converged_shape()`. The install/publish gate asserts the live proof (`drift (equal=1 shape=0)` post-prime) as a hard check. The first genuine convergence event is the B.5 first-fire transaction.
@@ -2945,7 +2984,7 @@ This table is the fast-lookup version of the FORBIDDEN verdicts above. If you fi
 | Re-sbsign an already-signed UKI | Produces 2 Authenticode signers, fails the hook's signer-count check | Trust `ukify build` to sign once | M.2 |
 | Duplicate `root=UUID=` fields in cmdline | Behavior is parser-implementation-defined | Single `root=` and single `rd.luks.uuid=` per cmdline | M.3 |
 | Assert the literal `shape=1` in the B.4 decider's converged `--debug-print` decision line | The decider prints `drift (equal=N shape=N)` only on the drift branch; the converged branch prints the worded `unchanged (manifest==baseline AND converged-shape)`: there is no `shape=1` numeric form | Parse the decision token and branch on text (`case` accepting `unchanged*converged-shape*` and `drift*`) | O.1 |
-| Assert `lock path is absent` after a clean decider/helper exit | `flock(1)` releases on fd close but does not unlink; the file persists across invocations as a deliberate `flock` idiom, not a bug. The "absent" invariant is structurally wrong, not just brittle. | Use the `flock <> -n` probe pattern with symlink rejection: `if [ -e "$LOCK" ] \|\| [ -L "$LOCK" ]; then [ -f "$LOCK" ] && [ ! -L "$LOCK" ] \|\| fail; ( exec 9<>"$LOCK"; flock -n 9 ) \|\| fail; fi` | J.3 |
+| Assert `lock path is absent` after a clean decider/helper exit | `flock(1)` releases on fd close but does not unlink; the file is expected to persist across invocations. Path absence is therefore an invalid invariant. | Use the `flock <> -n` probe pattern with symlink rejection: `if [ -e "$LOCK" ] \|\| [ -L "$LOCK" ]; then [ -f "$LOCK" ] && [ ! -L "$LOCK" ] \|\| fail; ( exec 9<>"$LOCK"; flock -n 9 ) \|\| fail; fi` | J.3 |
 | Assert `Loaded libdnf plugin "actions"` in `/var/log/dnf5.log` as Gate 6A evidence | The file does not log plugin-load entries in this Fedora 43 environment | Use `journalctl -q -t tboot-dnf-posttrans --since "$PRE_TIME"` as authoritative evidence; assert `exit reason:` line count + `last-decision` epoch advancement | J.1 |
 | Lexicographically compare `date -Iseconds` output against `/var/log/dnf5.log` timestamps | TZ-offset formats are incompatible (`+02:00` vs `+0200`) and dnf5.log is not the authoritative source anyway | Use `journalctl --since` (handles `+02:00`-format input natively via systemd's time parser) | J.2 |
 | Clear `LoaderEntryDefault` (NVRAM reset, manual `bootctl set-default ""`, or implicit via firmware reset) on a system with unexpected `.efi` files in `/boot/efi/EFI/Linux/` | systemd-boot's "highest version string" fallback may select a db.crt-signed forensic UKI that is firmware-loadable; the bare-kver variant fails closed at LUKS (passphrase prompt, fail-safe but visually identical to a real Gate 6 failure); the `test-*-pcrsig-*` variants may unlock if their embedded policy pubkey matches the live key (silent substitution; not proven by audit) | First execute the B.2.5 ESP forensic UKI cleanup gate (rename to `.forensic-b1` / `.forensic-b3` suffixes; no deletion). Until B.2.5 closes, do not clear `LoaderEntryDefault`. | L.1 |
@@ -3074,7 +3113,8 @@ For fast lookup. If you observe the symptom on the left, look at the finding on 
 the unsafe-reboot sentinel cannot be written. The systemd-boot decider and helper also reject a
 symlinked state directory and require `root:root` ownership with mode 0700. Documentation was
 aligned with the embedded UKI policy model, controlled key rotation, TPM replacement and the June
-operational validation. The current artifact hashes are recorded in `SHA256SUMS`; older hashes
+operational validation. The catalog prose was also tightened without changing its findings,
+commands or evidence. The current artifact hashes are recorded in `SHA256SUMS`; older hashes
 below identify the historical May validation run. The revised scripts passed repository integrity,
 syntax and embedded-copy checks. A new live transaction and reboot regression run remains
 outstanding.
@@ -3164,12 +3204,13 @@ files are pre-existing development-phase forensic artifacts from B.1 (pre-hook b
 build, no `.pcrpkey`/`.pcrsig`) and B.3 (hook live-validation `test-tpm2initrd-pcrsig-*.efi` and
 `test-ukify-native-pcrsig-*.efi`, both with `.pcrpkey`/`.pcrsig` present). **All 3 unexpected files
 are `sbverify`-OK against `db.crt`, `signer_count = 1`, and VMA-sane**: they would be accepted by
-firmware if selected, so they are **firmware-loadable forensic UKIs**, not merely "menu clutter".
+firmware if selected. They are **firmware-loadable forensic UKIs**, even though
+they may appear as menu clutter.
 For the bare-kver UKI: signed but lacks `.pcrpkey`/`.pcrsig`, so it is outside the validated
 forward-sealed path; would be expected to fail closed at LUKS unlock if selected (operator-visible
 passphrase prompt: fail-safe but symptomatically identical to a real Gate 6 failure). For the two
 `test-*` UKIs: they MAY unlock LUKS if their embedded `.pcrpkey` matches the live policy public
-key, but **this was not proven by the audit** (do not overclaim: proving it requires extracting
+key, but **this was not proven by the audit** (verification requires extracting
 `.pcrpkey` from each forensic UKI via read-only `objcopy --dump-section` against a tmpfs copy and
 comparing to `/etc/systemd/tpm2-pcr-public-key.pem`). The `.loaderror`-suffixed broken-objcopy UKI
 from B.1 is correctly excluded from systemd-boot enumeration by its suffix (validates the
