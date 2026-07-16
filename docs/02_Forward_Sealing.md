@@ -204,13 +204,12 @@ policy against the **current** PCR state before writing a slot. That check is
 useful when the signature describes the PCR state that exists during
 enrollment.
 
-The validated hook in this project signs PCR 11 for the `enter-initrd` phase,
-because early-boot disk unlocking occurs in that phase. Enrollment is performed
-later, after the machine has progressed beyond it. The current runtime PCR 11
-therefore differs from the signed `enter-initrd` value, and enrollment-time
-signature validation would fail even though the boot-time policy is correct.
+The hook signs PCR 11 for the `enter-initrd` phase, when early-boot disk unlock
+takes place. Enrollment happens later in the boot process. At that point PCR 11
+no longer matches the signed `enter-initrd` value, so enrollment-time signature
+validation fails even though the signature is valid at unlock time.
 
-The validated split-policy enrollment shape is consequently:
+Enroll the split policy as follows:
 
 ```bash
 systemd-cryptenroll /dev/sda3 \
@@ -220,10 +219,10 @@ systemd-cryptenroll /dev/sda3 \
   --tpm2-public-key-pcrs=11
 ```
 
-Safety is maintained by retaining the passphrase recovery keyslot, validating
-the split policy through a real reboot, and comparing runtime PCR 11 with the
-stored prediction. See Module 3 and finding G.1 in the Diagnostic Findings
-Catalog.
+Keep the passphrase recovery keyslot until a real reboot confirms TPM unlock.
+After the reboot, compare runtime PCR 11 with the stored prediction. Module 3
+and finding G.1 in the Diagnostic Findings Catalog cover this validation in
+detail.
 
 ---
 

@@ -99,11 +99,10 @@ Secure Boot is enabled, and the UKI contains an embedded `.cmdline`; under
 those conditions systemd-stub does not accept an externally supplied
 replacement command line.
 
-PCR 12 remains relevant for deployment models that intentionally permit
-external command-line arguments, credentials, extensions or add-ons. Binding
-such deployments to PCR 12 is a possible future hardening measure, but this
-must not be presented as a demonstrated bypass of the configuration validated
-here. Evidence status: **future / deployment-dependent**.
+Deployments that allow external command-line arguments, credentials,
+extensions or add-ons may still need PCR 12. Binding those deployments to PCR
+12 is possible future work. It was not needed or tested in this configuration.
+Evidence status: **future / deployment-dependent**.
 
 ## What is missing
 

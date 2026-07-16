@@ -34,21 +34,17 @@ Five layers:
 | 4. Disk encryption | LUKS2 split policy: PCR 7 (static) + PCR 11 (signed) |
 | 5. Governance | `libdnf5-actions` decider/helper chain that re-signs on drift |
 
-Layer 5 is the interesting one. A `libdnf5-actions` rule invokes a decider after
-every completed host transaction. The decider compares a manifest of
-boot-relevant inputs with a stored baseline. When it detects drift, a helper
-rebuilds the initramfs and UKIs, invokes the canonical signing hook and
-refreshes the expected PCR 11 value. Because the LUKS policy authorises signed
-PCR states rather than one literal value, the LUKS keyslot itself is never
-touched.
+A `libdnf5-actions` rule runs the decider after each completed host transaction.
+The decider compares the current boot-input manifest with its stored baseline.
+If they differ, the helper rebuilds the initramfs and UKIs, runs the signing
+hook and refreshes the expected PCR 11 value. The LUKS policy accepts PCR states
+signed by the policy key, so this process does not touch the LUKS keyslot.
 
-The chain fails closed against blessing an unsafe boot state. The action runs
-in `post_transaction`, after the RPM transaction has committed, so a signing
-failure does not roll packages back. Instead, DNF reports an error, the
-baseline is not advanced, and the `UNSAFE-TO-REBOOT` sentinel remains present
-until the boot artifacts are successfully repaired. The sentinel is an
-operational stop marker; this implementation does not mechanically inhibit a
-reboot.
+The action runs in `post_transaction`, after RPM has committed the package
+changes. A signing failure cannot roll back those changes. DNF returns an
+error, the baseline stays unchanged, and the `UNSAFE-TO-REBOOT` file remains
+until the boot artifacts have been repaired. This file warns the operator; it
+does not prevent the machine from rebooting.
 
 ## What was validated
 
