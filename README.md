@@ -1,5 +1,10 @@
 # TPM-Enforced Trusted Boot Chain on Fedora / RHEL
 
+In plain terms, this project allows an encrypted Fedora server to install
+legitimate operating-system updates and still unlock automatically at the next
+boot. The TPM rejects unauthorized boot changes, while approved updates are
+detected, rebuilt, signed and authorized automatically.
+
 My thesis project for the associate degree (graduaat) in System and Network
 Administration at PXL University of Applied Sciences, built with an industry
 partner: a trusted boot chain on Fedora Server 43 that keeps working when you
@@ -8,19 +13,52 @@ forward sealing and LUKS2 auto-unlock, held together by a DNF actions chain
 that evaluates boot-input drift after every package transaction and rebuilds
 only when necessary. The LUKS keyslot is never re-enrolled.
 
-RHEL is the design target; Fedora 43 is what it was validated on.
+## Research question and conclusion
+
+**Research question:** Can a mutable, package-managed Fedora server retain
+TPM-backed automatic LUKS2 unlock across kernel, initramfs and bootloader
+updates without re-enrolling the LUKS keyslot?
+
+**Conclusion:** Yes. The project demonstrates that this is feasible by
+combining static PCR 7 binding, signed PCR 11 authorization, boot-input drift
+detection and transaction-triggered convergence of the UKI and bootloader
+artifacts. Legitimate updates can advance the trusted state without changing
+the enrolled LUKS policy key.
+
+Fedora Server 43 was the validated platform. RHEL was treated as the
+architectural design target but was not independently tested.
 
 ## Why
 
-TPM-sealed disk encryption is well documented for static systems and breaks on
-mutable ones. Run a kernel update and the measured boot components change, PCR
-values shift, and the TPM refuses to release the LUKS key on the next boot. You
-either get a passphrase prompt on a headless server, or an operator "fixes" it
-by re-enrolling the keyslot and quietly weakens the setup every time.
+Static PCR-bound TPM auto-unlock becomes brittle on mutable systems because
+legitimate kernel, initramfs and bootloader updates change the measured state.
+The PCR values shift, and the TPM refuses to release the LUKS key on the next
+boot. You either get a passphrase prompt on a headless server, or an operator
+"fixes" it by re-enrolling the keyslot and quietly weakens the setup every
+time.
 
 The usual answers are freezing the kernel, moving to an immutable image-based
 OS, or accepting manual re-sealing after every update. None of those fit a
 normal package-managed server, so this project takes a different route.
+
+## Original contribution
+
+Secure Boot, UKIs, TPM2 PolicyAuthorize, `systemd-measure` and
+`systemd-cryptenroll` are existing platform mechanisms. The contribution of
+this project is their integration into an update-resilient workflow for a
+mutable Fedora system:
+
+- A deterministic boot-input manifest covering fourteen categories of input.
+- A DNF5 decider/helper architecture that separates decisions from privileged
+  changes.
+- A canonical UKI rebuild and signing hook.
+- Independent PCR 11 prediction and verification.
+- A separate systemd-boot signing and propagation chain with a loopback-ESP
+  safety checkpoint.
+- Baseline advancement only after the boot artifacts have converged.
+- An unsafe-reboot state that remains set after a failed rebuild.
+- Validation across a full system update and reboot without LUKS keyslot
+  re-enrollment.
 
 ## How it works
 
@@ -32,7 +70,7 @@ Five layers:
 | 2. Boot artifact | Signed UKIs built with `ukify`, driven by a `kernel-install` hook |
 | 3. Forward sealing | PCR 11 signed policy (PolicyAuthorize) via a TPM-sealed RSA-3072 key |
 | 4. Disk encryption | LUKS2 split policy: PCR 7 (static) + PCR 11 (signed) |
-| 5. Governance | `libdnf5-actions` decider/helper chain that re-signs on drift |
+| 5. Update governance and lifecycle | DNF5 convergence automation, key lifecycle, recovery and audit controls |
 
 A `libdnf5-actions` rule runs the decider after each completed host transaction.
 The decider compares the current boot-input manifest with its stored baseline.
@@ -45,6 +83,23 @@ changes. A signing failure cannot roll back those changes. DNF returns an
 error, the baseline stays unchanged, and the `UNSAFE-TO-REBOOT` file remains
 until the boot artifacts have been repaired. This file warns the operator; it
 does not prevent the machine from rebooting.
+
+## Methodology
+
+The system was implemented and tested on Fedora Server 43 in a Proxmox virtual
+machine using UEFI Secure Boot and a virtual TPM 2.0. Development followed an
+incremental, gate-based process:
+
+1. Establish custom Secure Boot and signed UKI boot.
+2. Enroll the LUKS2 split policy.
+3. Validate TPM unlock and PCR prediction.
+4. Introduce DNF-driven boot-input drift detection.
+5. Automate UKI and systemd-boot convergence.
+6. Test update, reboot, tamper and recovery paths.
+
+Success required a completed update, a clean reboot without a passphrase,
+runtime PCR 11 matching the stored prediction, no LUKS keyslot re-enrollment
+and preservation of the recovery credential.
 
 ## What was validated
 
@@ -65,6 +120,18 @@ pending.
 Captured console evidence is in
 [docs/07_Runtime_Validation_Evidence.md](docs/07_Runtime_Validation_Evidence.md),
 tamper scenarios in [docs/08_Attack_Scenarios.md](docs/08_Attack_Scenarios.md).
+
+## Threat model
+
+The design addresses offline disk access, unauthorized pre-boot modification,
+Secure Boot policy changes and unapproved changes to the kernel, initramfs or
+embedded command line.
+
+It does not protect a system after an attacker has obtained root access in the
+running operating system. In the validated local-signing design, root access
+can expose or invoke the signing authority, modify baselines and alter the
+installed automation. Physical hardware behavior, customer package streams
+and RHEL were outside the validated scope.
 
 ## Runtime demonstration
 
