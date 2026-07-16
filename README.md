@@ -4,11 +4,13 @@ This thesis project, completed for the associate degree (graduaat) in System
 and Network Administration at PXL University of Applied Sciences in
 collaboration with Piros, demonstrates how an encrypted Fedora Server 43
 system can install legitimate operating-system updates and retain TPM-backed
-automatic LUKS2 unlock at the next boot. Unauthorized boot changes are
-rejected, while approved updates are detected, rebuilt, signed and authorized
-automatically. The implementation combines custom Secure Boot keys, signed
-Unified Kernel Images, TPM2 forward sealing and a DNF5 actions chain that
-reacts to boot-input drift. The LUKS keyslot is never re-enrolled.
+automatic LUKS2 unlock at the next boot. Signed Unified Kernel Images (UKIs)
+are the central boot artifact in the design. Each UKI combines the kernel,
+initramfs, embedded command line, operating-system metadata and TPM2 PCR policy
+material in one measured and Secure Boot-signed file. A DNF5 actions chain
+detects boot-input drift, rebuilds and signs the UKIs, and refreshes the
+expected PCR 11 state. Unauthorized boot changes are rejected, while approved
+updates advance the trusted state without re-enrolling the LUKS keyslot.
 
 ## Research question and conclusion
 
