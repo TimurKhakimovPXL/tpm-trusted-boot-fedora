@@ -58,6 +58,26 @@ Captured console evidence is in
 [docs/07_Runtime_Validation_Evidence.md](docs/07_Runtime_Validation_Evidence.md),
 tamper scenarios in [docs/08_Attack_Scenarios.md](docs/08_Attack_Scenarios.md).
 
+## Runtime demonstration
+
+A recorded validation run shows the DNF decider/helper chain, the canonical
+`80-tpm2-sign.install` hook, UKI rebuilding and signing, PCR 11 prediction
+refresh, sentinel clearing, Secure Boot and measured-UKI verification, and a
+reboot into the signed UKI.
+
+[Watch the runtime trusted-boot demonstration](validation/tpm-trusted-boot-runtime-demo.mp4).
+
+The video is an original laboratory console capture. Text documents in this
+repository use sanitized machine identifiers.
+
+## Thesis report
+
+The English public edition of the graduation project report is available in
+both publication and editable formats:
+
+- [English thesis report (PDF)](docs/thesis/Timur_Khakimov_TPM_Trusted_Boot_Thesis_EN.pdf)
+- [English thesis source (DOCX)](docs/thesis/source/Timur_Khakimov_TPM_Trusted_Boot_Thesis_EN.docx)
+
 ## Findings along the way
 
 Everything that broke is written up in
