@@ -87,16 +87,15 @@ The operator-relevant facts:
 - It is the **UKI signing authority**. The B.2 automation chain does not sign UKIs itself; it *invokes the conditions that cause this hook to run*. If the hook is wrong, every downstream measurement is wrong.
 - It reads its UKI layout from `/etc/kernel/uki.conf` (the path `kernel-install`'s ukify plugin honours) — *not* `/etc/systemd/ukify.conf`, which only applies when `ukify` is called directly. This distinction is a known mentor-note error (`06F`).
 - It depends on `BOOT_ROOT=/boot/efi` being persisted in `/etc/kernel/install.conf`; the default `BOOT_ROOT=/boot` puts UKIs in the wrong place.
-- It uses one native `ukify build` invocation with the PCR-signing and Secure
-  Boot options. It uses neither `ukify --join-pcrsig` nor
-  `objcopy --add-section`: the former silently no-ops on the validated systemd
-  release, while the latter can produce a binary that passes `sbverify` but is
-  firmware-rejected at `LoadImage()` because of corrupt section VMAs (`06F`
-  B.1-B.2).
+- It passes the PCR-signing and Secure Boot options to a single native
+  `ukify build` command. `ukify --join-pcrsig` silently does nothing on the
+  tested systemd release. `objcopy --add-section` can produce a binary that
+  passes `sbverify` but fails at firmware `LoadImage()` because its section VMAs
+  are corrupt (`06F` B.1-B.2).
 
-Deep dive: the validated package-update architecture is `05` §3 and the
-forward-sealing theory is `02`. The byte-exact hook source is inlined in `06B`
-Step 14 and shipped as `hooks/80-tpm2-sign.install` (sha-pinned).
+See `05` §3 for the package-update design and `02` for the forward-sealing
+model. The byte-exact hook source is in `06B` Step 14 and
+`hooks/80-tpm2-sign.install`; both copies are pinned by sha256.
 
 ### 3.4 Forward sealing and the two PCRs
 

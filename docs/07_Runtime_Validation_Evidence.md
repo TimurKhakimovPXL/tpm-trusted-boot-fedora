@@ -150,13 +150,12 @@ shows:
 
 - the DNF5 action rules invoking the decider/helper chains;
 - initramfs and UKI rebuilding through `kernel-install`;
-- the canonical `80-tpm2-sign.install` hook signing the UKIs;
+- `80-tpm2-sign.install` signing the UKIs;
 - expected PCR 11 prediction and storage;
 - baseline advancement and sentinel clearing;
 - Secure Boot and measured-UKI verification;
 - a real reboot into the signed UKI; and
 - runtime PCR 11 verification after reconnecting.
 
-The recording demonstrates the controlled package-reinstall and reboot path.
-It is additional evidence for the automation chains, not a raw transcript of
-the later unrestricted full-system `dnf update`.
+The recording covers the controlled package reinstall and reboot. It does not
+contain the later unrestricted full-system `dnf update` transcript.

@@ -162,17 +162,17 @@ This is the recommended model for enterprise fleets. It is also the architecture
 
 ---
 
-## 3. Workflow 1 — Validated Package-Based Updates with DNF5
+## 3. Workflow 1: Validated Package-Based Updates with DNF5
 
-The validated implementation replaces the earlier generic hook and fixed
-package-watch-list examples with the byte-pinned hook, action rules, deciders
-and helpers shipped in this repository.
+The lab uses the byte-pinned hook, action rules, deciders and helpers shipped in
+this repository. These replace the earlier generic hook and fixed package watch
+list.
 
-### 3.1 Canonical Components
+### 3.1 Components
 
 | Component | Role |
 |---|---|
-| `hooks/80-tpm2-sign.install` | Canonical UKI rebuild and signing authority |
+| `hooks/80-tpm2-sign.install` | Rebuilds and signs UKIs |
 | `dnf-actions/50-tboot-posttrans.actions` | Runs the boot-input decider after every completed host transaction |
 | `dnf-actions/tboot-dnf-posttrans` | Computes the boot-input manifest and decides whether drift exists |
 | `dnf-actions/tboot-dnf-helper` | Rebuilds initramfs images and invokes `kernel-install` |
@@ -184,7 +184,7 @@ and helpers shipped in this repository.
 The action files are consumed by `libdnf5-plugin-actions`. Deciders determine
 whether work is required; helpers perform the privileged mutations.
 
-### 3.2 Canonical UKI Signing Hook
+### 3.2 UKI Signing Hook
 
 `80-tpm2-sign.install` runs during `kernel-install add` for the UKI layout. It
 does not modify an already signed UKI with `objcopy`, and it does not rely on
@@ -196,16 +196,14 @@ does not modify an already signed UKI with `objcopy`, and it does not rely on
 - `--phases=enter-initrd` and the SHA-256 PCR bank; and
 - the Secure Boot `db` key and certificate.
 
-Before the result may replace the staged UKI, the hook verifies the required
-sections, embedded PCR policy, Secure Boot signature, signer count and PE/COFF
-section-layout invariants. The later `90-uki-copy.install` step receives the
-file only after those checks succeed.
+The hook checks the required sections, embedded PCR policy, Secure Boot
+signature, signer count and PE/COFF section layout before replacing the staged
+UKI. Only then can `90-uki-copy.install` copy the file to the ESP.
 
 ### 3.3 Boot-Input Drift Detection
 
-The broad action rule runs after every completed host transaction. This is
-intentional: package names alone do not reliably identify changes to measured
-boot inputs.
+The broad action rule runs after every completed host transaction because
+package names alone do not reliably identify changes to measured boot inputs.
 
 The decider computes a deterministic manifest covering fourteen classes of
 boot-relevant input, including installed kernels and modules, initramfs and
@@ -236,9 +234,9 @@ DNF transaction completes
           clear the sentinel
 ```
 
-The helper does not sign UKIs itself. It creates the conditions under which the
-canonical hook runs and then independently refreshes the expected PCR 11 value.
-The decider advances the baseline only after the helper succeeds.
+The helper does not sign UKIs itself. It runs the steps that trigger the signing
+hook, then independently refreshes the expected PCR 11 value. The decider
+advances the baseline only after the helper succeeds.
 
 ### 3.5 Failure Semantics
 
@@ -246,15 +244,15 @@ The DNF action executes in `post_transaction`. At that point the RPM database
 and package transaction have already committed. A later signing failure cannot
 roll those package changes back.
 
-Fail-closed therefore means:
+A failed post-transaction action has these results:
 
 - DNF reports the post-transaction failure;
 - the baseline is not advanced;
 - the `UNSAFE-TO-REBOOT` sentinel remains present; and
 - the machine must not reboot until the boot artifacts are repaired.
 
-The sentinel is an operational stop marker, not a machine-enforced reboot
-inhibitor. This workflow does not transactionally roll back RPM changes.
+The sentinel warns the operator but does not block a reboot. This workflow also
+does not roll back committed RPM changes.
 
 ### 3.6 systemd-boot Loader Updates
 
