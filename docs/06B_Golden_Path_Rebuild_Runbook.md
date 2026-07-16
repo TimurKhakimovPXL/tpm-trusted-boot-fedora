@@ -1,5 +1,5 @@
 <!--
-PUBLIC RELEASE VERSION — sanitized for publication.
+PUBLIC RELEASE VERSION: sanitized for publication.
 Machine-id, IP addresses (RFC 5737 documentation range), hostnames, and the
 LUKS UUID are format-valid EXAMPLE values, not the original lab identifiers.
 All PCR values, policy-key digests, and script hashes are genuine measurements
@@ -21,32 +21,50 @@ companion-evidence:
   - 06_Lab_Setup_Runbook_continuation.md
   - 06_Lab_Setup_Runbook_continuation_v2_1_patches.md
   - 06_Lab_Setup_Runbook_continuation_v3.md
-last-validated: 2026-05-28
+last-runbook-validation: 2026-05-28
+last-operational-validation: 2026-06-19
+current-source-regression: pending-live-run
 ---
 
 # 06B: Golden Path Trusted Boot Lab Rebuild Runbook
 
-**Purpose:** reproducible rebuild of the trusted boot lab from scratch.
+**Purpose:** reference rebuild of the validated trusted boot lab.
 
 **How to use this document:**
 
 - Follow steps in order. Do not skip snapshots.
 - Each step has a stop condition. If it triggers, halt and consult the linked finding in `06F_Diagnostic_Findings_Catalog.md` or the original evidence file.
-- Every command in this document has been validated against a real run on VM 500 (`tboot-lab`).
+- The gate sequence through Step 39 was validated against VM 500 (`tboot-lab`).
 - For the why behind a step, the matching forensic finding, or the deprecation rule, see `06F_Diagnostic_Findings_Catalog.md`.
 - For the chronological discovery context, the four `06_Lab_Setup_Runbook*.md` files are still around. They are kept while the migration to `06F` is being verified, and will be archived once the team agrees the migration is complete.
 
 > [!important] What this document is not
 > This document does not explain why each step is the way it is, what was tried before, or what failed during development. For that, see `06F_Diagnostic_Findings_Catalog.md` or the legacy evidence files. This document only contains the current validated path.
 
+> [!important] Public reproduction boundary
+> The repository contains the byte-pinned implementation and the validated gate
+> sequence. It does not contain the live Proxmox configuration, snapshot lineage
+> or current-state ledger used by the original lab. Replace references to
+> `proxmox_technical_docs_v13.md` and `00_Current_Project_State.md` with
+> equivalent site-specific values before running a gate. Do not treat example
+> identifiers or historical hashes as values for a different machine.
+
+> [!note] Validation after the recorded runbook session
+> Steps 1 through 39 record the gate state as of 28 May 2026. On 19 June 2026,
+> the same system completed an unrestricted `dnf update`, including a kernel
+> version upgrade, and rebooted with automatic TPM unlock and matching runtime
+> PCR 11. The raw transcript from that later update is not included. Statements
+> such as "still gated" inside earlier steps describe the historical state at
+> that gate and are superseded by this later operational validation.
+
 > [!note] Helper scripts policy
 > The commands in this runbook are the canonical rebuild path and are intentionally inlined for self-contained execution. The scripts under `scripts/` (`predict_pcr11_from_uki.sh`, `validate_dnf_kernel_reinstall.sh`, `show_trusted_boot_result.sh`) are optional convenience wrappers for repeated validation and ongoing operations after the rebuild procedure is understood. They are not required to execute the golden path. See `scripts/README.md` for usage.
 
 > [!note] Where things live (routing model)
 > This file is the operational flight checklist and the self-contained rebuild path. Supporting files own the explanation:
-> - `06F_Diagnostic_Findings_Catalog.md` — failures, forbidden procedures, harness bugs, deprecations, forensic findings.
-> - `05_Update_Workflows_and_Key_Storage.md` — architecture, update workflow, trust model, signing workflow.
-> - `06C_Golden_Path_Operator_Notes.md` — operator mental models, methodology, rationale, orientation prose.
+> - `06F_Diagnostic_Findings_Catalog.md`: failures, forbidden procedures, harness bugs, deprecations, forensic findings.
+> - `05_Update_Workflows_and_Key_Storage.md`: architecture, update workflow, trust model, signing workflow.
+> - `06C_Golden_Path_Operator_Notes.md`: operator guidance, methodology and rationale.
 >
 > Dangerous-mistake guards (what bricks or locks the system, when to stop, when rollback is required, which snapshot protects the current cliff edge) stay **here**, inline with the step they protect.
 
@@ -54,12 +72,12 @@ last-validated: 2026-05-28
 
 ## Per-step format
 
-Every step uses this structure. The bold-field header form below is the single conforming form — steps do not use `###`-heading fields and do not omit the header.
+Every step uses this structure. The bold-field header form below is the single conforming form: steps do not use `###`-heading fields and do not omit the header.
 
 ```
 ## Step N: Short operational title
 
-**Goal:** Concise operational explanation. 2–5 lines maximum — enough to know what the step accomplishes and why it is ordered here, without theory. Deep rationale lives in 06C / 05 / 06F.
+**Goal:** Concise operational explanation. 2–5 lines maximum: enough to know what the step accomplishes and why it is ordered here, without theory. Deep rationale lives in 06C / 05 / 06F.
 **Prerequisites:** Exact prior step/gate requirements (closed gates, rollback anchors, frozen shas this step depends on).
 **Where to run:** Proxmox host pve-host / Fedora VM 500 as root / mixed.
 
@@ -78,7 +96,7 @@ Every step uses this structure. The bold-field header form below is the single c
 
 **Expected-output rule:** prefer actual validated output or a check/result table over prose. Where a value is machine-specific use placeholders `<KVER>`, `<MID>`, `<sha256>`, `<PCR7>`, `<PCR11>`, `<snapshot-name>`. Never invent exact output; if it is not recoverable, mark it as a pattern with a TODO to recapture.
 
-**Sha-pinned sources:** several steps inline a script via heredoc whose sha256 is a validated invariant (the hook, the B.2.2 helper, the PCR predictor, the B.2.3 decider, the B.4 helper, the B.4 decider). Those heredoc bodies are byte-exact — never edit them, including their comments.
+**Sha-pinned sources:** several steps inline a script via heredoc whose sha256 is a validated invariant (the hook, the B.2.2 helper, the PCR predictor, the B.2.3 decider, the B.4 helper, the B.4 decider). Those heredoc bodies are byte-exact: never edit them, including their comments.
 
 ---
 
@@ -866,7 +884,7 @@ None yet. Step 14 covers hook lint, install, and snapshot together.
 **Where to run:** Fedora VM as `root`.
 
 > [!important] Source of the hook
-> The hook source below is the v2.1.2 form: ukify-native PCR signing, atomic-replace stage 9, SC2317/SC2329 ShellCheck disable directive on `_cleanup`. Sha256 = `a455444a54f5be265f822d85f4681cba8ed5365a4323c9008835022f3b8c502f`.
+> The hook source below is the v2.1.2 form: ukify-native PCR signing, atomic-replace stage 9, SC2317/SC2329 ShellCheck disable directive on `_cleanup`. Sha256 = `5857e51d5551e05a7ca384f71529ec2fef07f5a6dbe40df70c6bbe49d720947e`.
 > Do not use the objcopy form from `06_Lab_Setup_Runbook_continuation.md` §18.3. See `06F` finding B.1 for why.
 
 ### Commands: write the hook
@@ -880,12 +898,12 @@ tee /tmp/80-tpm2-sign.install <<'HOOK_EOF'
 #
 # Forward-seal kernel-install-built UKIs by rebuilding the staged UKI via
 # `ukify build` with native PCR signing flags. Operates entirely on
-# $KERNEL_INSTALL_STAGING_AREA and runs before 90-uki-copy.install — on any
+# $KERNEL_INSTALL_STAGING_AREA and runs before 90-uki-copy.install: on any
 # failure, the ESP is never touched.
 #
 # References:
 #   Module 5 §2.2          (TPM-sealed signing key)
-#   Module 5 §3.2          (kernel-install hook design — updated)
+#   Module 5 §3.2          (kernel-install hook design: updated)
 #   Runbook §16.1   (corr) (objcopy unsafe for PE+ construction)
 #   Runbook §16.13  (corr) (objcopy --add-section produces firmware-rejected UKI)
 #   Runbook §16.17         (ukify build native PCR signing canonical)
@@ -924,7 +942,7 @@ info() { log "info: $*"; }
 err()  { log "error: $*"; }
 
 #============================================================================
-# Cleanup trap — always shred scratch contents on exit
+# Cleanup trap: always shred scratch contents on exit
 #============================================================================
 
 # shellcheck disable=SC2317,SC2329  # invoked via trap below
@@ -939,7 +957,7 @@ _cleanup() {
 trap _cleanup EXIT HUP INT TERM
 
 #============================================================================
-# Stage 1 — Gate: only run for kernel-install add of UKI layout
+# Stage 1: Gate: only run for kernel-install add of UKI layout
 #============================================================================
 
 COMMAND="${1:-}"
@@ -955,7 +973,7 @@ KERNEL_VERSION="${2:-}"
 [[ "${KERNEL_INSTALL_UKI_GENERATOR:-ukify}" == "ukify" ]] || exit 0
 
 # Skip if kernel-install was invoked with an external UKI image (KERNEL_INSTALL_IMAGE_TYPE=uki)
-# — that path does not produce a staged UKI for us to enrich
+# That path does not produce a staged UKI for us to enrich.
 [[ "${KERNEL_INSTALL_IMAGE_TYPE:-}" != "uki" ]] || exit 0
 
 # kernel-install must have given us a staging area
@@ -980,7 +998,7 @@ done
 info "starting for kernel ${KERNEL_VERSION}"
 
 #============================================================================
-# Stage 2 — Scratch directory (tmpfs, 0700, root-only)
+# Stage 2: Scratch directory (tmpfs, 0700, root-only)
 #============================================================================
 
 if [[ -d "$SCRATCH" ]]; then
@@ -989,16 +1007,16 @@ if [[ -d "$SCRATCH" ]]; then
 fi
 install -d -m 0700 -o root -g root "$SCRATCH"
 
-# Confirm we're on tmpfs (defence in depth — if /run/tboot-sign somehow lands
+# Confirm we're on tmpfs (defence in depth: if /run/tboot-sign somehow lands
 # on persistent storage, we abort before any key material is written there)
 SCRATCH_FSTYPE="$(stat -f -c '%T' "$SCRATCH")"
 if [[ "$SCRATCH_FSTYPE" != "tmpfs" ]]; then
-    err "scratch dir $SCRATCH is on $SCRATCH_FSTYPE, not tmpfs — aborting"
+    err "scratch dir $SCRATCH is on $SCRATCH_FSTYPE, not tmpfs: aborting"
     exit 1
 fi
 
 #============================================================================
-# Stage 3 — Locate staged UKI; sanity-check 60-ukify's output
+# Stage 3: Locate staged UKI; sanity-check 60-ukify's output
 #============================================================================
 
 STAGED_UKI="${KERNEL_INSTALL_STAGING_AREA}/${UKI_NAME}"
@@ -1006,15 +1024,15 @@ STAGED_UKI="${KERNEL_INSTALL_STAGING_AREA}/${UKI_NAME}"
 [[ -s "$STAGED_UKI" ]] || { err "staged UKI empty: $STAGED_UKI"; exit 1; }
 
 if ! sbverify --cert "$DB_CRT" "$STAGED_UKI" >/dev/null 2>&1; then
-    err "60-ukify produced unsigned UKI — uki.conf likely missing [UKI] SecureBoot* keys"
+    err "60-ukify produced unsigned UKI: uki.conf likely missing [UKI] SecureBoot* keys"
     exit 1
 fi
 
 STAGED_SIZE="$(stat -c%s "$STAGED_UKI")"
-info "60-ukify output present and signed (${STAGED_SIZE} bytes) — will rebuild with .pcrsig"
+info "60-ukify output present and signed (${STAGED_SIZE} bytes): will rebuild with .pcrsig"
 
 #============================================================================
-# Stage 5 — Unseal policy private key (no stage 4 — no extraction needed)
+# Stage 5: Unseal policy private key (no stage 4: no extraction needed)
 #============================================================================
 
 info "unsealing policy private key (TPM2)"
@@ -1039,7 +1057,7 @@ fi
 info "policy private key unsealed and validated"
 
 #============================================================================
-# Stage 7 — Rebuild UKI via ukify-native PCR signing (NEW — replaces old 4/6/7/8)
+# Stage 7: Rebuild UKI via ukify-native PCR signing (NEW: replaces old 4/6/7/8)
 #============================================================================
 #
 # Old hook (§18.3):
@@ -1083,7 +1101,7 @@ BUILT_SIZE="$(stat -c%s "$SCRATCH/built.efi")"
 info "ukify build succeeded (${BUILT_SIZE} bytes)"
 
 #============================================================================
-# Stage 9 — Atomic replace within staging
+# Stage 9: Atomic replace within staging
 #============================================================================
 #
 # 90-uki-copy.install will copy the staged UKI to the ESP. By replacing
@@ -1092,9 +1110,9 @@ info "ukify build succeeded (${BUILT_SIZE} bytes)"
 #
 # Two-step replace because $SCRATCH (tmpfs) and $KERNEL_INSTALL_STAGING_AREA
 # may be on different filesystems:
-#   step 1 — install built.efi to STAGED_UKI.new in the staging dir (cross-fs
+#   step 1: install built.efi to STAGED_UKI.new in the staging dir (cross-fs
 #            copy; non-atomic but to a sentinel name that 90-uki-copy ignores)
-#   step 2 — rename .new over the original within the staging dir (same fs,
+#   step 2: rename .new over the original within the staging dir (same fs,
 #            atomic per POSIX rename(2))
 #
 
@@ -1103,11 +1121,11 @@ install -m 0600 -o root -g root "$SCRATCH/built.efi" "$STAGED_NEW"
 mv -f "$STAGED_NEW" "$STAGED_UKI"
 
 #============================================================================
-# Stage 10 — Belt-and-braces verification of the final staged UKI
+# Stage 10: Belt-and-braces verification of the final staged UKI
 #============================================================================
 #
 # These checks must all pass. If any fail, the hook exits non-zero,
-# kernel-install aborts the transaction, and 90-uki-copy never runs —
+# kernel-install aborts the transaction, and 90-uki-copy never runs:
 # the ESP is never touched.
 #
 
@@ -1116,20 +1134,20 @@ mv -f "$STAGED_NEW" "$STAGED_UKI"
 INSPECT_COPY="$SCRATCH/final-inspect.efi"
 cp "$STAGED_UKI" "$INSPECT_COPY"
 
-# 10.1 — .pcrpkey and .pcrsig sections present
+# 10.1: .pcrpkey and .pcrsig sections present
 if ! objdump -h "$INSPECT_COPY" \
      | awk '$2==".pcrpkey"{p=1} $2==".pcrsig"{s=1} END{exit !(p && s)}'; then
     err "final UKI missing .pcrpkey or .pcrsig"
     exit 1
 fi
 
-# 10.2 — Authenticode signature verifies against db.crt
+# 10.2: Authenticode signature verifies against db.crt
 if ! sbverify --cert "$DB_CRT" "$STAGED_UKI" >/dev/null 2>&1; then
     err "final UKI sbverify failed"
     exit 1
 fi
 
-# 10.3 — Exactly one Authenticode signer (no double-signing, no missing sig)
+# 10.3: Exactly one Authenticode signer (no double-signing, no missing sig)
 sig_count="$(pesign --show-signature --in="$INSPECT_COPY" 2>/dev/null \
               | grep -c 'common name' || true)"
 if (( sig_count != 1 )); then
@@ -1137,7 +1155,7 @@ if (( sig_count != 1 )); then
     exit 1
 fi
 
-# 10.4 — Section-VMA sanity (catch §16.13-style layout corruption)
+# 10.4: Section-VMA sanity (catch §16.13-style layout corruption)
 #
 # Any section with VMA >= $VMA_SANITY_THRESHOLD indicates the kind of
 # layout damage objcopy --add-section produced (.pcrsig at 0x200000000).
@@ -1154,11 +1172,11 @@ if objdump -h "$INSPECT_COPY" \
        }
        END { exit !bad }
      '; then
-    err "final UKI has section(s) with anomalous VMA (>= ${VMA_SANITY_THRESHOLD}) — see Runbook §16.13"
+    err "final UKI has section(s) with anomalous VMA (>= ${VMA_SANITY_THRESHOLD}): see Runbook §16.13"
     exit 1
 fi
 
-# 10.5 — File size within sanity range (kernel UKIs are 30–80 MB; outside
+# 10.5: File size within sanity range (kernel UKIs are 30–80 MB; outside
 # this is a strong signal something went wrong)
 FINAL_SIZE="$(stat -c%s "$STAGED_UKI")"
 if (( FINAL_SIZE < 20 * 1024 * 1024 || FINAL_SIZE > 200 * 1024 * 1024 )); then
@@ -1187,7 +1205,7 @@ wc -l /tmp/80-tpm2-sign.install
 
 - `shellcheck -S info` exits 0 with no output
 - `bash -n` exits 0 with no output
-- `sha256sum` reports `a455444a54f5be265f822d85f4681cba8ed5365a4323c9008835022f3b8c502f`
+- `sha256sum` reports `5857e51d5551e05a7ca384f71529ec2fef07f5a6dbe40df70c6bbe49d720947e`
 - `wc -l` reports 296 lines
 
 ### Stop condition (lint)
@@ -1197,7 +1215,7 @@ wc -l /tmp/80-tpm2-sign.install
 
 ### Commands: synthetic dry-run before installing on the canonical path
 
-The dry-run runs the hook against a tmpfs synthetic staging area exactly as `kernel-install` would, without touching the ESP — so a structurally invalid forward-sealed UKI is caught here, before the Step 15 cliff edge. Rationale (why syntactic lint is insufficient, what runtime properties this exercises) is in `06C`; the firmware-rejected-UKI failure mode is `06F` B.1.
+The dry-run runs the hook against a tmpfs synthetic staging area exactly as `kernel-install` would, without touching the ESP, so a structurally invalid forward-sealed UKI is caught here, before the Step 15 cliff edge. Rationale (why syntactic lint is insufficient, what runtime properties this exercises) is in `06C`; the firmware-rejected-UKI failure mode is `06F` B.1.
 
 ```bash
 # Inside VM as root
@@ -1364,7 +1382,7 @@ shred -u /tmp/80-tpm2-sign.install
 
 ### Expected output
 
-- Canonical path file: mode `-rwxr-xr-x`, owner `root root`, sha `a455444a…502f`
+- Canonical path file: mode `-rwxr-xr-x`, owner `root root`, sha `5857e51d…20947e`
 - `file` reports `Bourne-Again shell script, Unicode text, UTF-8 text executable`
 - Hook ordering shows `60-ukify.install` → `80-tpm2-sign.install` → `90-uki-copy.install` (lex-sorted)
 - `/tmp/80-tpm2-sign.install` shredded
@@ -1379,7 +1397,7 @@ shred -u /tmp/80-tpm2-sign.install
 ```bash
 # Run on Proxmox host
 qm snapshot 500 module5-kernel-signing-hook-rewritten \
-  --description "Hook at /etc/kernel/install.d/80-tpm2-sign.install (sha256 a455444a54f5be265f822d85f4681cba8ed5365a4323c9008835022f3b8c502f, mode 0755, 11397 bytes, 296 lines). v2.1.2 form (ukify-native PCR signing + SC2317/SC2329 disable on _cleanup). Lint clean (ShellCheck 0.11.0 -S info, bash -n). Hook NOT YET exercised by real kernel-install/DNF transaction. Holds remain in effect (discipline-only): dnf upgrade kernel*, dnf reinstall kernel*, dnf upgrade systemd*."
+  --description "Hook at /etc/kernel/install.d/80-tpm2-sign.install (sha256 5857e51d5551e05a7ca384f71529ec2fef07f5a6dbe40df70c6bbe49d720947e, mode 0755, 11319 bytes, 296 lines). v2.1.2 form (ukify-native PCR signing + SC2317/SC2329 disable on _cleanup). Lint clean (ShellCheck 0.11.0 -S info, bash -n). Hook NOT YET exercised by real kernel-install/DNF transaction. Holds remain in effect (discipline-only): dnf upgrade kernel*, dnf reinstall kernel*, dnf upgrade systemd*."
 ```
 
 ✅ `module5-kernel-signing-hook-rewritten` taken.
@@ -1408,7 +1426,7 @@ HOOK_PATH="/etc/kernel/install.d/80-tpm2-sign.install"
 
 # Sanity gates
 echo "Hook sha:    $(sha256sum "$HOOK_PATH" | awk '{print $1}')"
-echo "Expected:    a455444a54f5be265f822d85f4681cba8ed5365a4323c9008835022f3b8c502f"
+echo "Expected:    5857e51d5551e05a7ca384f71529ec2fef07f5a6dbe40df70c6bbe49d720947e"
 echo "PCR 7 now:   $(cat /sys/class/tpm/tpm0/pcr-sha256/7)"
 echo "PCR 7 ref:   <PCR7 from Step 11 snapshot description>"
 
@@ -1451,7 +1469,7 @@ ls -la /run/tboot-sign 2>/dev/null && echo "✗ trap did not fire" || echo "✓ 
 
 # Hook integrity preserved
 sha256sum "$HOOK_PATH"
-# expected: a455444a54f5be265f822d85f4681cba8ed5365a4323c9008835022f3b8c502f
+# expected: 5857e51d5551e05a7ca384f71529ec2fef07f5a6dbe40df70c6bbe49d720947e
 ```
 
 ### Commands: verify ESP UKI
@@ -1492,7 +1510,7 @@ shred -u "$TMPD"/* && rm -rf "$TMPD"
 | `ERR_COUNT` | 0 |
 | `HOOK_START_COUNT` | 1 |
 | `/run/tboot-sign` post-DNF | absent |
-| Hook sha post-DNF | `a455444a…502f` (unchanged) |
+| Hook sha post-DNF | `5857e51d…20947e` (unchanged) |
 | `${MID}-${KVER}.efi` | exists, ~56 MB |
 | sbverify | OK |
 | Section count | 13 (includes `.pcrpkey` and `.pcrsig`) |
@@ -1652,7 +1670,7 @@ PCR11="$(ssh root@192.0.2.40 'cat /sys/class/tpm/tpm0/pcr-sha256/11')"
 NEW_HOOK_UKI_SHA="$(ssh root@192.0.2.40 'sha256sum /boot/efi/EFI/Linux/$(cat /etc/machine-id)-$(uname -r).efi | awk "{print \$1}"')"
 
 qm snapshot 500 module5-kernel-signing-hook-validated \
-  --description "Block B.3 live validation complete. Rewritten ukify-native kernel-install hook validated end-to-end through real DNF transaction → reboot → runtime PCR 11 match. Hook at /etc/kernel/install.d/80-tpm2-sign.install (sha256 a455444a54f5be265f822d85f4681cba8ed5365a4323c9008835022f3b8c502f). Booted UKI: /boot/efi/EFI/Linux/<MID>-<KVER>.efi (sha ${NEW_HOOK_UKI_SHA}). Runtime PCR 7 = ${PCR7} (Block A seal-time). Runtime PCR 11 = ${PCR11} (matches systemd-measure prediction post-ready). Full phase chain confirmed. DNF transaction: dnf reinstall -y kernel-core-<KVER> kernel-modules-<KVER> kernel-modules-core-<KVER>; explicitly excluded kernel meta-package. Phase 1 manual UKI preserved at bare-kver path. Forensic artefacts preserved. Block B Stage 3 done. Pending: B.2 dracut-only path, B.4 systemd-boot signing automation, B.5 systemd-boot reinstall validation, Module 3 LUKS enrollment."
+  --description "Block B.3 live validation complete. Rewritten ukify-native kernel-install hook validated end-to-end through real DNF transaction → reboot → runtime PCR 11 match. Hook at /etc/kernel/install.d/80-tpm2-sign.install (sha256 5857e51d5551e05a7ca384f71529ec2fef07f5a6dbe40df70c6bbe49d720947e). Booted UKI: /boot/efi/EFI/Linux/<MID>-<KVER>.efi (sha ${NEW_HOOK_UKI_SHA}). Runtime PCR 7 = ${PCR7} (Block A seal-time). Runtime PCR 11 = ${PCR11} (matches systemd-measure prediction post-ready). Full phase chain confirmed. DNF transaction: dnf reinstall -y kernel-core-<KVER> kernel-modules-<KVER> kernel-modules-core-<KVER>; explicitly excluded kernel meta-package. Phase 1 manual UKI preserved at bare-kver path. Forensic artefacts preserved. Block B Stage 3 done. Pending: B.2 dracut-only path, B.4 systemd-boot signing automation, B.5 systemd-boot reinstall validation, Module 3 LUKS enrollment."
 
 qm listsnapshot 500
 lvs --units g vm-storage/vm-thin
@@ -2018,7 +2036,10 @@ None.
 > [!important] Split policy, not combined
 > The natural impulse is `--tpm2-public-key-pcrs=7+11` to bind both PCRs via signed policy. This **does not work**: the hook signs only PCR 11 (`.pcrsig pcrs=[11]`, see Step 20), so a signed binding that includes PCR 7 has no signature entry to match against.
 >
-> The correct form binds PCR 7 statically (it represents stable Secure Boot policy state) and PCR 11 via signed policy (it changes on every UKI rebuild, hence forward sealing). See `06F` finding G.1 for the failure mode if this is mis-specified.
+> The correct form binds PCR 7 statically because it represents stable Secure
+> Boot policy state, and PCR 11 through signed policy because measured UKI
+> content can change during updates. See `06F` finding G.1 for the failure mode
+> if this is mis-specified.
 
 > [!warning] `--tpm2-signature` is intentionally omitted
 > `systemd-cryptenroll --tpm2-signature=<json>` validates the signature against the **current** PCR 11 state before writing the keyslot. The hook signs the **enter-initrd** phase value of PCR 11, not the post-`ready` runtime value. Validation against current PCR 11 always fails outside initrd context, producing `Failed to unseal secret using TPM2: No such device or address`. See `06F` finding G.1.
@@ -2195,7 +2216,7 @@ echo "OK: /boot/initramfs contains tpm2-device=auto"
 
 # TPM2 userspace presence (Step 13 prerequisite: /etc/dracut.conf.d/90-tboot-tpm2.conf
 # with add_dracutmodules+=" tpm2-tss "). Without these, the initramfs can read the
-# crypttab option but has no userspace to act on it — boot silently falls through
+# crypttab option but has no userspace to act on it: boot silently falls through
 # to passphrase prompt.
 TSS2_COUNT="$(lsinitrd "$INITRD" | grep -c 'libtss2' || true)"
 SC_PRESENT="$(lsinitrd "$INITRD" | grep -c 'systemd-cryptsetup' || true)"
@@ -2257,14 +2278,14 @@ EOF
 
 | Check | Pass criterion |
 |---|---|
-| Stage A — sed diff | exactly one line changed, options field gains `,tpm2-device=auto` |
-| Stage B — initramfs sha256 | changed |
-| Stage B — `lsinitrd` crypttab | contains `tpm2-device=auto` |
-| Stage B — TPM2 userspace in initramfs | `libtss2` entries > 0, `systemd-cryptsetup` present |
-| Stage C — UKI sha256 | changed |
-| Stage C — hook journal | clean, 1 start, 0 errors |
-| Stage C — section count | 13 |
-| Stage C — embedded UKI crypttab | contains `tpm2-device=auto` |
+| Stage A: sed diff | exactly one line changed, options field gains `,tpm2-device=auto` |
+| Stage B: initramfs sha256 | changed |
+| Stage B: `lsinitrd` crypttab | contains `tpm2-device=auto` |
+| Stage B: TPM2 userspace in initramfs | `libtss2` entries > 0, `systemd-cryptsetup` present |
+| Stage C: UKI sha256 | changed |
+| Stage C: hook journal | clean, 1 start, 0 errors |
+| Stage C: section count | 13 |
+| Stage C: embedded UKI crypttab | contains `tpm2-device=auto` |
 
 ### Stop condition
 
@@ -2397,7 +2418,7 @@ reboot
 After login, run the following block as root. It automates every check in the Expected-behaviour table and produces an explicit `Step 26 verdict:` line. Exit code is non-zero on any failure.
 
 > [!note] Heuristic limit on the journal check
-> The final journal grep searches for TPM-related cryptsetup lines as evidence that TPM unlock took. This is a heuristic — a system that booted via passphrase fallback can still emit some TPM-related lines from a failed unlock attempt. Always corroborate with direct observation: did a LUKS passphrase prompt appear during boot? If yes, TPM unlock did not complete regardless of what the journal shows.
+> The final journal grep searches for TPM-related cryptsetup lines as evidence that TPM unlock took. This is a heuristic: a system that booted via passphrase fallback can still emit some TPM-related lines from a failed unlock attempt. Always corroborate with direct observation: did a LUKS passphrase prompt appear during boot? If yes, TPM unlock did not complete regardless of what the journal shows.
 
 ```bash
 bash <<'EOF'
@@ -2465,7 +2486,7 @@ If TPM unlock proves unfixable from inside the booted system:
 
 ```bash
 systemd-cryptenroll /dev/sda3 --wipe-slot=tpm2
-# Returns disk to keyslot 0 (passphrase) only — same as pre-Step-22 baseline
+# Returns disk to keyslot 0 (passphrase) only: same as pre-Step-22 baseline
 ```
 
 Then revisit the policy chain and re-enroll.
@@ -2486,7 +2507,7 @@ qm snapshot 500 module3-complete \
 ## Step 27: Install `libdnf5-plugin-actions` and confirm plugin loads
 
 **Goal:** Add the libdnf5 actions plugin to the system as the DNF trigger layer for the dracut-only update path, and confirm it is loaded by libdnf5 at transaction time. The plugin is installed but no action file is written yet, so the trigger fires nothing.
-**Prerequisites:** Module 3 complete (`module3-complete` snapshot reachable). Hook sha matches `a455444a54f5be265f822d85f4681cba8ed5365a4323c9008835022f3b8c502f`. Booted UKI sha matches the value recorded in `00_Current_Project_State.md`. `dnf upgrade systemd*` discipline gate in force.
+**Prerequisites:** Module 3 complete (`module3-complete` snapshot reachable). Hook sha matches `5857e51d5551e05a7ca384f71529ec2fef07f5a6dbe40df70c6bbe49d720947e`. Booted UKI sha matches the value recorded in `00_Current_Project_State.md`. `dnf upgrade systemd*` discipline gate in force.
 **Where to run:** Proxmox host for the snapshot; Fedora VM as `root` for the install.
 **Last validated:** 2026-05-21. `libdnf5-plugin-actions-5.2.18.0-3.fc43.x86_64` installed cleanly (1 package, 0 dependencies, no `systemd*` packages in the transaction). Plugin load confirmed in `/var/log/dnf5.log`: `INFO Loaded libdnf plugin "actions" ... version="1.4.0"`.
 
@@ -2502,7 +2523,7 @@ qm snapshot 500 module5-b2-pre-actions-install \
 ```
 
 ```bash
-# 2. Install (run on VM, interactive — do NOT use -y; review the summary before y/N)
+# 2. Install (run on VM, interactive: do NOT use -y; review the summary before y/N)
 dnf install libdnf5-plugin-actions
 # Required to all hold before answering 'y':
 #   - Installing: lists exactly libdnf5-plugin-actions, nothing else
@@ -2519,7 +2540,7 @@ rpm -q --qf '%{name}-%{evr}.%{arch}\n' libdnf5-plugin-actions    # record NVR
 
 ```bash
 # 4. Confirm plugin loads via /var/log/dnf5.log delta.
-# Use a harmless package that is NOT currently installed — dnf install --assumeno
+# Use a harmless package that is NOT currently installed: dnf install --assumeno
 # on an already-installed package gets weird resolver semantics. The reference run
 # used 'figlet' (its candidate-suitability is established in Step 28); on any other
 # rebuild pick a candidate the same way Step 28's candidate-selection probe does,
@@ -2573,7 +2594,7 @@ None at this step. The next snapshot is in Step 28 after the trigger fires and t
 > `dnf reinstall` requires the installed NEVRA to be present in an enabled repo, which is brittle on long-lived Fedora 43 systems. Use a fresh `dnf install` of a known-not-installed candidate. The validated candidate for the reference rebuild is `figlet`; alternatives that passed the same gates are `cowsay`, `sl`, `pv`. See `06F` finding H.2.
 
 > [!warning] Action rule must never invoke signing-pipeline tools
-> The action's `command` field is `/usr/bin/logger` — nothing else. The validated `80-tpm2-sign.install` remains the only UKI signing authority in this project. If a future action file calls `dracut`, `kernel-install`, `ukify`, `sbsign`, or `systemd-measure` directly, B.2's role separation has been broken — that work belongs in the helper script (B.2.2), invoked through `kernel-install add`, not in the action rule.
+> The action's `command` field is `/usr/bin/logger`: nothing else. The validated `80-tpm2-sign.install` remains the only UKI signing authority in this project. If a future action file calls `dracut`, `kernel-install`, `ukify`, `sbsign`, or `systemd-measure` directly, B.2's role separation has been broken: that work belongs in the helper script (B.2.2), invoked through `kernel-install add`, not in the action rule.
 
 ### Commands
 
@@ -2592,11 +2613,11 @@ dnf install --assumeno figlet     # confirm 1 package, 0 deps, no sensitive pack
 # 2. Write the log-only probe action (atomic write via install)
 install -m 0644 -o root -g root /dev/stdin \
   /etc/dnf/libdnf5-plugins/actions.d/00-tboot-trigger-probe.actions <<'EOF'
-# tboot-trigger-probe — B.2.1 trigger validation, log-only
+# tboot-trigger-probe: B.2.1 trigger validation, log-only
 # Scope:    Log-only via /usr/bin/logger to journal tag "tboot-trigger-probe".
 # Boundary: Must never invoke dracut, kernel-install, ukify, sbsign, or
 #           systemd-measure. The validated 80-tpm2-sign.install (sha256
-#           a455444a54f5be265f822d85f4681cba8ed5365a4323c9008835022f3b8c502f)
+#           5857e51d5551e05a7ca384f71529ec2fef07f5a6dbe40df70c6bbe49d720947e)
 #           remains the only UKI signing authority in this project.
 # Format:   callback_name:package_filter:direction:options:command
 #           See man 8 libdnf5-actions.
@@ -2644,7 +2665,7 @@ EOF
 ```
 
 ```bash
-# 4. Evidence snapshot — captures the validated state BEFORE cleanup mutates it.
+# 4. Evidence snapshot: captures the validated state BEFORE cleanup mutates it.
 # Run on Proxmox host pve-host. See Snapshot point section below for the full command;
 # the snapshot must be taken at this point in the sequence, not after cleanup.
 echo "Take snapshot module5-b2-1-validated NOW from the Proxmox host before continuing."
@@ -2664,7 +2685,7 @@ find /etc/dnf/libdnf5-plugins/actions.d/ -maxdepth 1 -name '*.actions' -type f \
 ```
 
 ```bash
-# 6. Clean continuation snapshot — captures the post-cleanup state.
+# 6. Clean continuation snapshot: captures the post-cleanup state.
 # Run on Proxmox host pve-host. See Snapshot point section below for the full command;
 # this is the rollback anchor for B.2.2.
 echo "Take snapshot module5-b2-1-cleaned NOW from the Proxmox host."
@@ -2690,7 +2711,7 @@ Cleanup: `figlet` no longer in `rpm -q figlet`; `actions.d/` contains only the r
 Two snapshots, taken in order. The first captures the evidence (before cleanup runs) so the validated state is preserved exactly as it was when the six invariants held. The second is the clean continuation anchor for B.2.2.
 
 ```bash
-# 1. Evidence snapshot — take BEFORE running the cleanup commands above.
+# 1. Evidence snapshot: take BEFORE running the cleanup commands above.
 # Captures: figlet installed, probe action still named *.actions, journal contains
 # the tboot-trigger-probe entry, six invariants confirmed.
 qm snapshot 500 module5-b2-1-validated \
@@ -2698,7 +2719,7 @@ qm snapshot 500 module5-b2-1-validated \
 ```
 
 ```bash
-# 2. Clean continuation snapshot — take AFTER running the cleanup commands above
+# 2. Clean continuation snapshot: take AFTER running the cleanup commands above
 # (figlet removed, probe action renamed to .disabled-after-b21-validation).
 # This is the correct rollback anchor for B.2.2.
 qm snapshot 500 module5-b2-1-cleaned \
@@ -2717,10 +2738,10 @@ qm snapshot 500 module5-b2-1-cleaned \
 
 **Where to run:** Proxmox host for the snapshot; Fedora VM as `root` for the install.
 
-**Last validated:** 2026-05-22. tboot-dnf-helper v0.1.0-draft-B.2.2-pre-validation (sha `4bef2239…f4b`) and tboot-predict-pcr11 (sha `2d4985fa…160`) installed and self-tested. Dry-run enumerated 2 kernels and reported all 10 invariants `ok` (no state change).
+**Historical live validation:** 2026-05-22. The predecessor artifacts were installed and self-tested. The current repository revision is `tboot-dnf-helper` v1.0.0 (sha `937afc7a…5e44`) and `tboot-predict-pcr11` v1.0.0 (sha `b729ec27…3de`). These revised artifacts have passed static checks but still require a new live transaction and reboot regression run.
 
 > [!important] Trust-boundary preservation
-> The helper never invokes signing tooling directly. It runs `dracut --force` per kernel, then `kernel-install add` per kernel (which fires the validated `80-tpm2-sign.install` hook), then `tboot-predict-pcr11 --store` once against the booted/default UKI. The hook (sha `a455444a…02f`) at `/etc/kernel/install.d/` remains the only UKI signing authority. The helper is **not** globally fail-atomic across all enumerated kernels: a failure on kernel N+1 does not undo the ESP UKI that was already written for kernels 1..N. What is preserved is the trust boundary itself — every per-kernel UKI on the ESP is the output of a `kernel-install add → 80-tpm2-sign` transaction; nothing else writes signed UKIs. If the helper fails mid-run, rollback uses Step 30's `module5-b2-2-pre-real-run` snapshot (taken before any helper invocation).
+> The helper never invokes signing tooling directly. It runs `dracut --force` per kernel, then `kernel-install add` per kernel (which fires the validated `80-tpm2-sign.install` hook), then `tboot-predict-pcr11 --store` once against the booted/default UKI. The hook (sha `5857e51d…47e`) at `/etc/kernel/install.d/` remains the only UKI signing authority. The helper is **not** globally fail-atomic across all enumerated kernels: a failure on kernel N+1 does not undo the ESP UKI that was already written for kernels 1..N. What is preserved is the trust boundary itself: every per-kernel UKI on the ESP is the output of a `kernel-install add → 80-tpm2-sign` transaction; nothing else writes signed UKIs. If the helper fails mid-run, rollback uses Step 30's `module5-b2-2-pre-real-run` snapshot (taken before any helper invocation).
 
 > [!note] State directory is installation responsibility, not helper responsibility
 > `/var/lib/tboot-dnf-helper` must exist as `root:root 0700` before the helper runs. The helper refuses to write markers if the directory is missing, a symlink, or has the wrong owner or mode. This is deliberate: the helper does not create state directories silently, because a misconfigured one is an audit signal that must not be papered over.
@@ -2754,13 +2775,13 @@ cat > /tmp/tboot-dnf-helper.staged <<'TBOOT_DNF_HELPER_EOF'
 #     kernel under /lib/modules/*/vmlinuz (per 06F finding G.2).
 #   - Invoke `kernel-install add ${KVER} /lib/modules/${KVER}/vmlinuz` for
 #     each kernel. This is the entry point that fires the validated
-#     /etc/kernel/install.d/80-tpm2-sign.install hook — the only UKI signing
+#     /etc/kernel/install.d/80-tpm2-sign.install hook: the only UKI signing
 #     authority in this project.
 #   - Refresh /root/tboot-lab/state/expected-pcr11-after-hook-uki.txt by
 #     shelling out to the sibling /usr/local/sbin/tboot-predict-pcr11
 #     against the currently-booted kernel's MID-prefixed UKI on the ESP.
 #   - Log everything to journald under tag `tboot-dnf-helper`.
-#   - Write atomic state markers under /var/lib/tboot-dnf-helper/ — but
+#   - Write atomic state markers under /var/lib/tboot-dnf-helper/, but
 #     only when that directory exists and passes safety checks.
 #
 # Trust-boundary preservation. This helper is NOT a signing authority. It
@@ -2799,7 +2820,7 @@ set -euo pipefail
 # Constants
 # ============================================================================
 
-readonly HELPER_VERSION="0.1.0-draft-B.2.2-pre-validation"
+readonly HELPER_VERSION="1.0.0"
 readonly TAG="tboot-dnf-helper"
 
 # Lock and state
@@ -2816,7 +2837,7 @@ readonly STATE_DIR_OWNER="root:root"
 # Signing-authority pin (matches 00_Current_Project_State.md invariant table).
 # Drift here means the only signing authority has been edited; refuse to run.
 readonly SIGNING_HOOK="/etc/kernel/install.d/80-tpm2-sign.install"
-readonly SIGNING_HOOK_SHA="a455444a54f5be265f822d85f4681cba8ed5365a4323c9008835022f3b8c502f"
+readonly SIGNING_HOOK_SHA="5857e51d5551e05a7ca384f71529ec2fef07f5a6dbe40df70c6bbe49d720947e"
 
 # PCR 11 prediction store (canonical project path; not under STATE_DIR).
 readonly PCR_STATE_DIR="/root/tboot-lab/state"
@@ -2856,7 +2877,7 @@ warn() { log "warn: $*"; }
 err()  { log "error: $*"; }
 
 # ============================================================================
-# Trap — cleanup only. Failure markers are written by explicit error paths.
+# Trap: cleanup only. Failure markers are written by explicit error paths.
 # ============================================================================
 
 # shellcheck disable=SC2317,SC2329  # invoked via trap below
@@ -2948,7 +2969,7 @@ _write_marker_atomic() {
 }
 
 # Usage: _write_failure_marker <code> <stage> <kver> <detail> [<src_log>]
-# Always returns 0 — inability to persist is logged to journald and the
+# Always returns 0: inability to persist is logged to journald and the
 # caller's error-path `exit 1` runs regardless.
 _write_failure_marker() {
     local code="$1" stage="$2" kver="$3" detail="$4" src_log="${5:-}"
@@ -3076,7 +3097,7 @@ _already_handled() {
 }
 
 # ============================================================================
-# Preflight — READ-ONLY checks. Never mutates the filesystem.
+# Preflight: READ-ONLY checks. Never mutates the filesystem.
 # Used by --self-test and by every real run before lock acquisition.
 # ============================================================================
 
@@ -3157,7 +3178,7 @@ _preflight() {
     fi
 
     # State directory: must exist, not be a symlink, root:root, 0700, writable.
-    # Install step creates it — never the helper.
+    # Install step creates it: never the helper.
     if ! _check_dir_safe "$STATE_DIR" "$STATE_DIR_MODE" "$STATE_DIR_OWNER" report; then
         rc=1
     fi
@@ -3188,7 +3209,7 @@ _preflight() {
 }
 
 # ============================================================================
-# Kernel enumeration — deterministic order via sort -V
+# Kernel enumeration: deterministic order via sort -V
 # ============================================================================
 
 _enumerate_kernels() {
@@ -3317,13 +3338,13 @@ if [[ "$MODE" == "production" ]] && (( DEDUP_USABLE == 1 )) \
     exit 0
 fi
 
-# --- scratch directory on /run (tmpfs) — verified before use ---
+# --- scratch directory on /run (tmpfs): verified before use ---
 SCRATCH="$(mktemp -d -p /run -t tboot-helper-XXXXXX)"
 chmod 0700 "$SCRATCH"
 
 SCRATCH_FSTYPE="$(stat -f -c '%T' "$SCRATCH")"
 if [[ "$SCRATCH_FSTYPE" != "tmpfs" ]]; then
-    err "scratch dir ${SCRATCH} is on ${SCRATCH_FSTYPE}, not tmpfs — aborting"
+    err "scratch dir ${SCRATCH} is on ${SCRATCH_FSTYPE}, not tmpfs: aborting"
     _write_failure_marker 1 "scratch" "(none)" "scratch dir ${SCRATCH} on ${SCRATCH_FSTYPE}, not tmpfs"
     exit 1
 fi
@@ -3432,7 +3453,7 @@ info "completed mode=${MODE} kernels=${#KVERS[@]} pcr11=${FINAL_PCR11}"
 exit 0
 TBOOT_DNF_HELPER_EOF
 
-EXPECTED_HELPER_SHA="4bef223925d3a2520e692403f0c0dd8a932770ec17136008a3d5f6f0b2620f4b"
+EXPECTED_HELPER_SHA="937afc7a0d199bf7b7d1a5f5bcccf45c37c0f4f7dd0ad924b2567c4da7125e44"
 STAGED_HELPER_SHA="$(sha256sum /tmp/tboot-dnf-helper.staged | awk '{print $1}')"
 [ "$STAGED_HELPER_SHA" = "$EXPECTED_HELPER_SHA" ] || { echo "FAIL: helper sha $STAGED_HELPER_SHA"; exit 30; }
 ```
@@ -3485,7 +3506,7 @@ cat > /tmp/tboot-predict-pcr11.staged <<'TBOOT_PREDICT_PCR11_EOF'
 
 set -euo pipefail
 
-readonly PREDICT_VERSION="0.1.0-draft-B.2.2-pre-validation"
+readonly PREDICT_VERSION="1.0.0"
 readonly TAG="tboot-predict-pcr11"
 
 readonly MEASURE="/usr/lib/systemd/systemd-measure"
@@ -3509,7 +3530,7 @@ info() { log "info: $*"; }
 err()  { log "error: $*"; }
 
 # ============================================================================
-# Trap — preserve rc, disable recursion, shred + rm scratch, exit rc
+# Trap: preserve rc, disable recursion, shred + rm scratch, exit rc
 # ============================================================================
 
 # shellcheck disable=SC2317,SC2329  # invoked via trap below
@@ -3572,7 +3593,7 @@ if [[ ! -x "$MEASURE" ]]; then
 fi
 
 # ============================================================================
-# Scratch directory on /run (tmpfs) — verified before use
+# Scratch directory on /run (tmpfs): verified before use
 # ============================================================================
 
 WORK="$(mktemp -d -p /run -t pcr11-predict-XXXXXX)"
@@ -3580,7 +3601,7 @@ chmod 0700 "$WORK"
 
 WORK_FSTYPE="$(stat -f -c '%T' "$WORK")"
 if [[ "$WORK_FSTYPE" != "tmpfs" ]]; then
-    err "scratch dir ${WORK} is on ${WORK_FSTYPE}, not tmpfs — aborting"
+    err "scratch dir ${WORK} is on ${WORK_FSTYPE}, not tmpfs: aborting"
     exit 1
 fi
 
@@ -3684,7 +3705,7 @@ fi
 exit 0
 TBOOT_PREDICT_PCR11_EOF
 
-EXPECTED_PREDICT_SHA="2d4985fa27726efff50bd91ba33ed1dd6e516fe2dd7350a48c73369b61aff160"
+EXPECTED_PREDICT_SHA="b729ec271dd76cd8b4581f16c86e50fc28b947f2a1de5a7e16c6d5828591e3de"
 STAGED_PREDICT_SHA="$(sha256sum /tmp/tboot-predict-pcr11.staged | awk '{print $1}')"
 [ "$STAGED_PREDICT_SHA" = "$EXPECTED_PREDICT_SHA" ] || { echo "FAIL: predict sha $STAGED_PREDICT_SHA"; exit 31; }
 ```
@@ -3759,7 +3780,7 @@ EOF
 
 ### Expected output
 
-Step 3: post-install verification reports helper sha `4bef2239…f4b`, predict sha `2d4985fa…160`, both files `mode=755 owner=root:root type=regular file`.
+Step 3: post-install verification reports helper sha `937afc7a…5e44`, predict sha `b729ec27…3de`, both files `mode=755 owner=root:root type=regular file`.
 
 Step 5: 13 preflight `ok:` lines (4 binaries, hook sha matches pinned value, `BOOT_ROOT=/boot/efi`, `/etc/kernel/cmdline` non-empty, ESP mounted, machine-id present, current-kernel UKI present, both state dirs safe, `boot_id` readable), `info: self-test: PASS`, exit 0.
 
@@ -3909,7 +3930,7 @@ sync; sleep 3; systemctl reboot
 ```
 
 ```bash
-# 5. After SSH reconnect — post-reboot validation
+# 5. After SSH reconnect: post-reboot validation
 bash <<'EOF'
 set -uo pipefail
 KVER="$(uname -r)"; MID="$(cat /etc/machine-id)"
@@ -3971,37 +3992,37 @@ Step 6: `qm listsnapshot 500 | tail -3` shows `module5-b2-2-real-run-validated �
 
 - Step 2 helper rc != 0: read `/var/lib/tboot-dnf-helper/last-failure` and `last-failure.log`. **Do not reboot.** Rollback to `module5-b2-2-pre-real-run`.
 - Step 2 exits 61-77 (any invariant FAIL): helper completed but produced inconsistent state. **Do not reboot.** Rollback to `module5-b2-2-pre-real-run`.
-- Step 5 exits 79-90 (post-reboot check FAIL): boot completed but a runtime invariant failed. Read the `FAIL:` line. Common causes: missing `expected-boot-kver` marker (exit 79 — step 4 reboot block skipped or interrupted); PCR 11 mismatch (measured-content chain drifted between predict and runtime; rare); passphrase prompt appeared (TPM unlock failed; operator typed passphrase to recover); `last-success` marker value diverged from `STORED_PCR11`. Rollback target: `module5-b2-2-pre-real-run`.
+- Step 5 exits 79-90 (post-reboot check FAIL): boot completed but a runtime invariant failed. Read the `FAIL:` line. Common causes: missing `expected-boot-kver` marker (exit 79: step 4 reboot block skipped or interrupted); PCR 11 mismatch (measured-content chain drifted between predict and runtime; rare); passphrase prompt appeared (TPM unlock failed; operator typed passphrase to recover); `last-success` marker value diverged from `STORED_PCR11`. Rollback target: `module5-b2-2-pre-real-run`.
 - LUKS passphrase prompt at Proxmox console during boot: TPM unlock failed. Type keyslot 0 passphrase to recover. **Step 30 is not passed.** Do not take `module5-b2-2-real-run-validated`. Rollback after triage.
 
 ### Snapshot points
 
-Two required snapshots: `module5-b2-2-pre-real-run` (taken before step 2; rollback target on hard failure) and `module5-b2-2-real-run-validated` (taken after step 5 PASS and operator passphrase confirmation; B.2.2 closure anchor). One optional snapshot: `module5-b2-2-post-helper-pre-reboot` (step 3 above) — skip it unless a separate forensic anchor is needed. The reference 2026-05-22 run did not take the optional snapshot.
+Two required snapshots: `module5-b2-2-pre-real-run` (taken before step 2; rollback target on hard failure) and `module5-b2-2-real-run-validated` (taken after step 5 PASS and operator passphrase confirmation; B.2.2 closure anchor). One optional snapshot: `module5-b2-2-post-helper-pre-reboot` (step 3 above): skip it unless a separate forensic anchor is needed. The reference 2026-05-22 run did not take the optional snapshot.
 
 ✅ Block B.2.2 complete. Helper is production-validated for the dracut-only update path. The next block, B.2.3, places a root-owned **decider** (`tboot-dnf-posttrans`) in front of the helper: an always-run `post_transaction` `.actions` rule invokes the decider, which computes a conservative boot-input manifest, compares against a primed baseline, and invokes the helper only on detected drift. B.2.3 is split into seven gates: Gate 1 (design lock) and Gate 2 (decider staged + external read-back validation) are non-mutating and run before any install; Gate 3 installs the decider and primes the baseline; Gates 4–7 install the rule, run negative validation, and close B.2.3. Gate 1 and Gate 2 are covered in Step 31 below. Gates 3–7 and B.2.4 will be appended once executed.
 
 ---
 
-## Step 31: Block B.2.3 Gate 1 + Gate 2 — design lock and staged-decider external read-back validation
+## Step 31: Block B.2.3 Gate 1 + Gate 2: design lock and staged-decider external read-back validation
 
 **Goal:** Close the two non-mutating B.2.3 gates. Gate 1 freezes the `.actions` rule shape, the 14-category boot-input manifest, the decider-vs-helper trust boundary, and the lock model in a design-decisions notes file. Gate 2 authors the decider source (`tboot-dnf-posttrans`), stages it at `/tmp/tboot-dnf-posttrans.staged`, and externally validates it through seven read-only checks: pre-stage invariants, syntax parse, ShellCheck, trust-boundary token scan (Deviation D regex), helper-lock-path scan, `if !`-rc-loss regression scan, and staging-only invariants. No install, no execution, no state-dir creation, no `.actions` file, no helper invocation, no Secure Boot / LUKS / ESP / `/etc/kernel/*` mutation.
 
 **Prerequisites:** Step 30 closed (`module5-b2-2-real-run-validated` is the rollback target).
 
-**Where to run:** Fedora VM as `root` (in `tmux`). No Proxmox host work — Gate 2 does not take a snapshot.
+**Where to run:** Fedora VM as `root` (in `tmux`). No Proxmox host work: Gate 2 does not take a snapshot.
 
-**Last validated:** 2026-05-24 — staged decider sha256 `35ad8733f190483f1bd6d071d2aa7cb8b1549286f9040086182443c584473cdd` (0644 root:root, 34,927 bytes, 996 lines); `bash -n` PASS; ShellCheck clean at `severity=warning`; trust-boundary + helper-lock + `if !`-rc-loss scans PASS; staging-only invariants PASS. See Appendix C and `06F` H.4.
+**Last validated:** 2026-05-24: staged decider sha256 `1e75110935a72fc9433c9b4bf5688d26bc6d3bd1e02f4388b5e1f32ff1e5cc05` (0644 root:root, 35,164 bytes, 1001 lines); `bash -n` PASS; ShellCheck clean at `severity=warning`; trust-boundary + helper-lock + `if !`-rc-loss scans PASS; staging-only invariants PASS. See Appendix C and `06F` H.4.
 
 > [!important] Gate 2 is staging/read-back only
 > No mutation to the canonical decider path, no decider execution, no state-dir creation, no `.actions` file, no helper invocation, no Secure Boot / LUKS / ESP / `/etc/kernel/*` mutation. The only commands run against the staged file are read-only checks such as `sha256sum`, `stat`, `wc -l`, `bash -n`, `awk` read-back scans (the Step 6 trust-boundary, helper-lock-path, and `if !` regression scanners), and optionally `shellcheck`. Step 7 explicitly verifies that none of the deferred-mutation surfaces have moved.
 
-> [!important] Decider lock is `/run/tboot-dnf-posttrans.lock` — NOT the helper lock
+> [!important] Decider lock is `/run/tboot-dnf-posttrans.lock`: NOT the helper lock
 > The decider owns its own lock and must never pre-acquire the helper's lock. Discussion of the helper's lock lives only in the top-of-source comment block of the staged decider source. Step 6 verifies externally that no runtime code names `/run/tboot-dnf-helper.lock`.
 
 > [!warning] Do not patch the staged source to silence audit-harness false positives
 > If the external Step-6 token scan fires a violation that the decider's in-script `_self_test_trust_boundary` self-scan does not, the conclusion is that the **harness regex is wrong**, not the staged source. Editing the staged file invalidates Step 3's recorded sha256 and bakes a workaround for a harness bug into the production decider source. Fix the harness to match the Deviation D regex used by the in-script self-scan. See `06F` H.4.
 
-### Gate 1 closure (design lock — recorded in the notes file, not re-run here)
+### Gate 1 closure (design lock: recorded in the notes file, not re-run here)
 
 Gate 1 froze the design in `/root/tboot-lab/notes/b2-3-design-decisions.md` (sha256 `4301ea0f9556739886d0ab249fd4d6c89d44553ee1bb523508ada1579be270c8`). To rebuild from scratch, recreate that notes file so its sha matches; the design rationale (why 14 manifest categories, the baseline-update policy, the performance budget) is in `05_Update_Workflows_and_Key_Storage.md` §3.3. The execution-critical frozen facts the later gates assert against:
 
@@ -4011,7 +4032,7 @@ Gate 1 froze the design in `/root/tboot-lab/notes/b2-3-design-decisions.md` (sha
   ```
   Empty `package_filter` makes the rule always-run; package discrimination is the decider's job.
 - **14 manifest categories:** dracut-config, dracut-modules, kernel-modules, firmware, udev-rules, modprobe-load, systemd-early-boot, cryptsetup-tooling, tpm2-tss, storage-tooling, fstab-crypttab, kernel-install, public-trust-config, fedora-kernel-config.
-- **Locks:** decider `/run/tboot-dnf-posttrans.lock` (decider-owned); helper `/run/tboot-dnf-helper.lock` (helper-owned — decider must never pre-acquire it).
+- **Locks:** decider `/run/tboot-dnf-posttrans.lock` (decider-owned); helper `/run/tboot-dnf-helper.lock` (helper-owned: decider must never pre-acquire it).
 - **State dirs:** `/var/lib/tboot-dnf-posttrans/` (0700; files 0600); reboot-safety sentinel `/var/lib/tboot-dnf-helper/UNSAFE-TO-REBOOT` (0600).
 - **Decider trust boundary (forbidden tokens):** `ukify sbsign sbverify systemd-measure systemd-cryptenroll efi-updatevar cryptsetup`.
 - **Baseline-update policy:** only on explicit `--prime` or on helper success after detected drift. No silent auto-prime, no repair on unchanged manifest.
@@ -4033,10 +4054,10 @@ CUR="$(sha256sum "$NOTES" | awk '{print $1}')"
 [ "$CUR" = "$EXP_NOTES_SHA" ] || { echo "FAIL: notes file sha drifted: $CUR (expected $EXP_NOTES_SHA)"; exit 12; }
 
 HELPER_SHA="$(sha256sum /usr/local/sbin/tboot-dnf-helper | awk '{print $1}')"
-[ "$HELPER_SHA" = "4bef223925d3a2520e692403f0c0dd8a932770ec17136008a3d5f6f0b2620f4b" ] \
+[ "$HELPER_SHA" = "937afc7a0d199bf7b7d1a5f5bcccf45c37c0f4f7dd0ad924b2567c4da7125e44" ] \
   || { echo "FAIL: helper sha drifted"; exit 13; }
 HOOK_SHA="$(sha256sum /etc/kernel/install.d/80-tpm2-sign.install | awk '{print $1}')"
-[ "$HOOK_SHA" = "a455444a54f5be265f822d85f4681cba8ed5365a4323c9008835022f3b8c502f" ] \
+[ "$HOOK_SHA" = "5857e51d5551e05a7ca384f71529ec2fef07f5a6dbe40df70c6bbe49d720947e" ] \
   || { echo "FAIL: hook sha drifted"; exit 14; }
 
 [ ! -e /tmp/tboot-dnf-posttrans.staged ] \
@@ -4121,7 +4142,7 @@ cat > /tmp/tboot-dnf-posttrans.staged <<'TBOOT_DNF_POSTTRANS_EOF'
 #   60  self-test trust-boundary scan: forbidden token in non-comment line
 #
 # Modes (preflight enforces helper presence in normal/dry-run/prime; the
-# dry-run requirement is INTENTIONAL — dry-run validates production readiness
+# dry-run requirement is INTENTIONAL: dry-run validates production readiness
 # end-to-end, including the helper's installation profile):
 #   (none) | --self-test | --debug-print | --dry-run | --prime [--confirm-prime]
 #   --version | --help
@@ -4138,7 +4159,7 @@ set -euo pipefail
 # Constants
 # ============================================================================
 
-readonly DECIDER_VERSION="0.1.0-draft-B.2.3-pre-validation"
+readonly DECIDER_VERSION="1.0.0"
 readonly TAG="tboot-dnf-posttrans"
 
 readonly LOCK_FILE="/run/tboot-dnf-posttrans.lock"
@@ -4951,7 +4972,12 @@ _mode_normal() {
             drift|no-baseline)
                 local reason="drift-detected"
                 [[ "$cmp" == "no-baseline" ]] && reason="no-baseline-present"
-                _write_sentinel "$reason" || warn "sentinel write failed; continuing"
+                if ! _write_sentinel "$reason"; then
+                    err "sentinel write failed; refusing to invoke helper"
+                    _write_last_decision "sentinel-write-failed" "${reason}; helper not invoked"
+                    _write_last_error "sentinel-write" "42" "helper not invoked"
+                    exit 42
+                fi
                 _persist_last_manifest "$cur"
                 _write_last_decision "helper-pending" "${reason}; invoking helper"
                 info "helper invocation decision: INVOKE (${reason})"
@@ -5065,7 +5091,7 @@ wc -l /tmp/tboot-dnf-posttrans.staged
 sha256sum /tmp/tboot-dnf-posttrans.staged
 ```
 
-Expected (reference run 2026-05-24): mode `644`, owner `root:root`, size `34927` bytes, lines `996`, sha256 `35ad8733f190483f1bd6d071d2aa7cb8b1549286f9040086182443c584473cdd`. Record the sha256 in the Gate 2 closure notes; this is the canonical Gate 2 artifact identity.
+Expected (reference run 2026-05-24): mode `644`, owner `root:root`, size `35164` bytes, lines `1001`, sha256 `1e75110935a72fc9433c9b4bf5688d26bc6d3bd1e02f4388b5e1f32ff1e5cc05`. Record the sha256 in the Gate 2 closure notes; this is the canonical Gate 2 artifact identity.
 
 #### Gate 2 Step 4: Parse-only bash syntax check
 
@@ -5108,7 +5134,7 @@ SRC=/tmp/tboot-dnf-posttrans.staged
 
 # --- gate-safety guard: refuse to read-back a missing/empty/unreadable source ---
 # Without this, each `awk "$SRC"` below would fail non-zero and the surrounding
-# `if awk ...; then` would treat "no violations found" as PASS — masking a
+# `if awk ...; then` would treat "no violations found" as PASS: masking a
 # missing staged file as a clean read-back.
 [[ -f "$SRC" && -s "$SRC" && -r "$SRC" ]] || {
     echo "FAIL: staged source missing, empty, or unreadable: $SRC"
@@ -5176,7 +5202,7 @@ if awk '
 
     END { exit !found }
 ' "$SRC"; then
-    echo "FAIL: v3 regression — if ! block captures \$? and would lose the failing rc"
+    echo "FAIL: v3 regression: if ! block captures \$? and would lose the failing rc"
     violations=$((violations+1))
 fi
 
@@ -5211,8 +5237,8 @@ Expected:
 # 7. Staging-only invariants.
 bash <<'EOF'
 set -uo pipefail
-EXP_HELPER_SHA="4bef223925d3a2520e692403f0c0dd8a932770ec17136008a3d5f6f0b2620f4b"
-EXP_HOOK_SHA="a455444a54f5be265f822d85f4681cba8ed5365a4323c9008835022f3b8c502f"
+EXP_HELPER_SHA="937afc7a0d199bf7b7d1a5f5bcccf45c37c0f4f7dd0ad924b2567c4da7125e44"
+EXP_HOOK_SHA="5857e51d5551e05a7ca384f71529ec2fef07f5a6dbe40df70c6bbe49d720947e"
 
 [ ! -e /usr/local/sbin/tboot-dnf-posttrans ] \
   || { echo "FAIL: decider installed (should be staging-only in Gate 2)"; exit 21; }
@@ -5252,7 +5278,7 @@ Expected: `=== Gate 2 staging-only invariants hold ===` followed by eight `corre
 
 - Step 1: `=== pre-stage invariants hold ===` with notes/helper/hook sha; exit 0.
 - Step 2: heredoc completes silently. No stdout.
-- Step 3: regular file `root:root` 0644, ~35 KB, ~996 lines; sha256 recorded.
+- Step 3: regular file `root:root` 0644, ~35 KB, ~1001 lines; sha256 recorded.
 - Step 4: `ok: bash -n PASS`.
 - Step 5: one of `ok: shellcheck clean at severity=warning`, `info: shellcheck findings (see …)`, or `info: shellcheck not installed; skipping`.
 - Step 6: `=== trust-boundary + v3 regression read-back: PASS ===` with the four labelled assertions.
@@ -5265,7 +5291,7 @@ Expected: `=== Gate 2 staging-only invariants hold ===` followed by eight `corre
 - Step 6 exits 16: the staged source is missing/empty/unreadable. Re-run Step 2.
 - Step 6 exits 17 on `cryptsetup` at `08-cryptsetup-tooling`: the harness uses an outdated regex form. Apply the Deviation D regex shown above (in-script-self-scan-equivalent) and re-run Step 6 only. **Do not patch the staged source.** See `06F` H.4.
 - Step 6 exits 17 on a genuine token violation (a forbidden token in non-comment, non-nolint runtime code): the heredoc body has a real trust-boundary breach. Fix the source and re-stage; do not proceed.
-- Step 6 exits 17 on the helper-lock-path leak or on a surviving `if ! func; then ... $?` pattern: same — fix the heredoc body, re-stage, re-run.
+- Step 6 exits 17 on the helper-lock-path leak or on a surviving `if ! func; then ... $?` pattern: same: fix the heredoc body, re-stage, re-run.
 - Step 7 exits 21–28: a Gate-2 mutation invariant moved. Severe. Stop, write the failure into the Gate-2 attempt log, and consider whether rollback to `module5-b2-2-real-run-validated` is required before any further work.
 
 ### Snapshot point
@@ -5274,17 +5300,17 @@ None. Gate 2 is non-mutating. `module5-b2-2-real-run-validated` remains the roll
 
 ### Gate 2 closure (recorded in attempt log, not in this runbook)
 
-The Gate 2 closure block, with run timestamp, recovered Step 3 metadata, Step 4 PASS, Step 5 ShellCheck status, the Step 6 first-attempt failure + harness correction note + second-attempt PASS, and the Step 7 PASS, lives at `/root/tboot-lab/notes/b2-3-gate-2-attempts.md` in the Obsidian vault — not in this runbook. The runbook captures the procedure; the attempt log captures the run.
+The Gate 2 closure block, with run timestamp, recovered Step 3 metadata, Step 4 PASS, Step 5 ShellCheck status, the Step 6 first-attempt failure + harness correction note + second-attempt PASS, and the Step 7 PASS, lives at `/root/tboot-lab/notes/b2-3-gate-2-attempts.md` in the Obsidian vault: not in this runbook. The runbook captures the procedure; the attempt log captures the run.
 
-✅ Block B.2.3 Gate 1 and Gate 2 complete. The decider source is authored, externally read-back-validated, and staged at `/tmp/tboot-dnf-posttrans.staged` (sha256 `35ad8733f190483f1bd6d071d2aa7cb8b1549286f9040086182443c584473cdd`) ready for Gate 3 install. The canonical path `/usr/local/sbin/tboot-dnf-posttrans` is intentionally absent; the state directory `/var/lib/tboot-dnf-posttrans/` is intentionally absent; no `.actions` rule is installed; the system has accumulated no mutation from Gate 2.
+✅ Block B.2.3 Gate 1 and Gate 2 complete. The decider source is authored, externally read-back-validated, and staged at `/tmp/tboot-dnf-posttrans.staged` (sha256 `1e75110935a72fc9433c9b4bf5688d26bc6d3bd1e02f4388b5e1f32ff1e5cc05`) ready for Gate 3 install. The canonical path `/usr/local/sbin/tboot-dnf-posttrans` is intentionally absent; the state directory `/var/lib/tboot-dnf-posttrans/` is intentionally absent; no `.actions` rule is installed; the system has accumulated no mutation from Gate 2.
 
 ---
 
-## Step 32: Block B.2.3 Gates 3.0–3.8 — decider install, state-dir create, baseline prime, closure snapshot
+## Step 32: Block B.2.3 Gates 3.0–3.8: decider install, state-dir create, baseline prime, closure snapshot
 
 **Goal.** Install the Gate-2-validated decider at `/usr/local/sbin/tboot-dnf-posttrans` (sub-gate 3.2), create the decider state directory `/var/lib/tboot-dnf-posttrans/` (sub-gate 3.4), prime the baseline manifest via `tboot-dnf-posttrans --prime` (sub-gate 3.6), prove zero drift between the primed baseline and a single `--debug-print` invocation (sub-gate 3.7), and take the Gate 3 closure snapshot `module5-b2-3-decider-installed-primed` on the Proxmox host (sub-gate 3.8). All other sub-gates (3.0 pre-flight, 3.1 staged-artifact re-verification, 3.3 installed-decider identity, 3.5 `--self-test`) are read-only verifications around these mutations.
 
-The production `.actions` rule (`50-tboot-posttrans.actions`) and the negative-validation transaction are out of scope for Step 32 — those are Gates 4–7. Block B.2.4 (live dracut-sensitive transaction validation) is also out of scope.
+The production `.actions` rule (`50-tboot-posttrans.actions`) and the negative-validation transaction are out of scope for Step 32: those are Gates 4–7. Block B.2.4 (live dracut-sensitive transaction validation) is also out of scope.
 
 **Rollback anchor.** `module5-b2-2-real-run-validated` (B.2.2 closure).
 
@@ -5351,7 +5377,7 @@ echo "ok: booted UKI sha b6002e666afdf71e5a083311295ac6a5f3ef3b443ceb4ec8c16c9dd
 ```bash
 # 2c-d. systemd-boot default + current entry via bootctl status parsing (per 06F I.2:
 #       bootctl get-default returns empty on this Fedora 43 VM despite bootctl status
-#       reporting the correct Default Entry — parse bootctl status instead).
+#       reporting the correct Default Entry: parse bootctl status instead).
 HOOK_ID="0123456789abcdef0123456789abcdef-6.19.14-200.fc43.x86_64.efi"
 bootctl_status="$(bootctl status 2>/dev/null)"
 default_entry="$(awk -F': ' '/^[[:space:]]*Default Entry:/ {print $2; exit}' <<< "$bootctl_status" | xargs)"
@@ -5382,13 +5408,13 @@ echo "ok: /run is tmpfs"
 
 # 5-7. Frozen artifact hashes from B.2.2 closure (hook + helper + predict + booted UKI).
 sha256sum /etc/kernel/install.d/80-tpm2-sign.install | awk '{print $1}' \
-  | grep -Ex 'a455444a54f5be265f822d85f4681cba8ed5365a4323c9008835022f3b8c502f' \
+  | grep -Ex '5857e51d5551e05a7ca384f71529ec2fef07f5a6dbe40df70c6bbe49d720947e' \
   || { echo "FAIL: hook sha drift"; exit 1; }
 sha256sum /usr/local/sbin/tboot-dnf-helper | awk '{print $1}' \
-  | grep -Ex '4bef223925d3a2520e692403f0c0dd8a932770ec17136008a3d5f6f0b2620f4b' \
+  | grep -Ex '937afc7a0d199bf7b7d1a5f5bcccf45c37c0f4f7dd0ad924b2567c4da7125e44' \
   || { echo "FAIL: helper sha drift"; exit 1; }
 sha256sum /usr/local/sbin/tboot-predict-pcr11 | awk '{print $1}' \
-  | grep -Ex '2d4985fa27726efff50bd91ba33ed1dd6e516fe2dd7350a48c73369b61aff160' \
+  | grep -Ex 'b729ec271dd76cd8b4581f16c86e50fc28b947f2a1de5a7e16c6d5828591e3de' \
   || { echo "FAIL: predict sha drift"; exit 1; }
 echo "ok: 4 frozen-artifact shas stable"
 ```
@@ -5429,7 +5455,7 @@ grep -E '^[[:space:]]*enabled[[:space:]]*=[[:space:]]*1[[:space:]]*$' \
 
 # 12. Staged decider artifact still present at /tmp (sub-gate 3.1 will sha-verify it).
 [[ -f /tmp/tboot-dnf-posttrans.staged && ! -L /tmp/tboot-dnf-posttrans.staged ]] \
-  || { echo "FAIL: /tmp/tboot-dnf-posttrans.staged missing or symlink — re-run Step 31 (Gate 2)"; exit 1; }
+  || { echo "FAIL: /tmp/tboot-dnf-posttrans.staged missing or symlink: re-run Step 31 (Gate 2)"; exit 1; }
 echo "ok: staged decider present at /tmp/tboot-dnf-posttrans.staged"
 echo "=== sub-gate 3.0 PASS ==="
 ```
@@ -5441,8 +5467,8 @@ bash <<'EOF'
 set -u
 
 STAGED="/tmp/tboot-dnf-posttrans.staged"
-EXP_SHA="35ad8733f190483f1bd6d071d2aa7cb8b1549286f9040086182443c584473cdd"
-EXP_SIZE=34927
+EXP_SHA="1e75110935a72fc9433c9b4bf5688d26bc6d3bd1e02f4388b5e1f32ff1e5cc05"
+EXP_SIZE=35164
 EXP_MODE=644
 EXP_OWNER="root:root"
 
@@ -5484,8 +5510,8 @@ DST_DIR="/usr/local/sbin"                            # canonical directory (a sy
 DST_REALDIR="$(readlink -f "$DST_DIR" 2>/dev/null || true)"
 DST_REAL="${DST_REALDIR}/tboot-dnf-posttrans"       # resolved real path
 EXP_REALDIR="/usr/local/bin"                         # Fedora 43 UsrMerge tail
-EXP_SHA="35ad8733f190483f1bd6d071d2aa7cb8b1549286f9040086182443c584473cdd"
-EXP_SIZE=34927
+EXP_SHA="1e75110935a72fc9433c9b4bf5688d26bc6d3bd1e02f4388b5e1f32ff1e5cc05"
+EXP_SIZE=35164
 EXP_MODE=755
 EXP_OWNER="root:root"
 TMP_PREFIX="${DST_REALDIR}/.tboot-dnf-posttrans."
@@ -5570,9 +5596,9 @@ echo "ok: SRC unchanged by install"
 n_actions="$(find /etc/dnf/libdnf5-plugins/actions.d/ -maxdepth 1 -name '*.actions' -type f | wc -l)"
 [ "$n_actions" -eq 0 ] || { echo "FAIL: .actions appeared"; exit 1; }
 for tuple in \
-  '/etc/kernel/install.d/80-tpm2-sign.install:a455444a54f5be265f822d85f4681cba8ed5365a4323c9008835022f3b8c502f' \
-  '/usr/local/sbin/tboot-dnf-helper:4bef223925d3a2520e692403f0c0dd8a932770ec17136008a3d5f6f0b2620f4b' \
-  '/usr/local/sbin/tboot-predict-pcr11:2d4985fa27726efff50bd91ba33ed1dd6e516fe2dd7350a48c73369b61aff160' \
+  '/etc/kernel/install.d/80-tpm2-sign.install:5857e51d5551e05a7ca384f71529ec2fef07f5a6dbe40df70c6bbe49d720947e' \
+  '/usr/local/sbin/tboot-dnf-helper:937afc7a0d199bf7b7d1a5f5bcccf45c37c0f4f7dd0ad924b2567c4da7125e44' \
+  '/usr/local/sbin/tboot-predict-pcr11:b729ec271dd76cd8b4581f16c86e50fc28b947f2a1de5a7e16c6d5828591e3de' \
   "/boot/efi/EFI/Linux/0123456789abcdef0123456789abcdef-6.19.14-200.fc43.x86_64.efi:b6002e666afdf71e5a083311295ac6a5f3ef3b443ceb4ec8c16c9ddb41077943"; do
     path="${tuple%%:*}"; sha="${tuple##*:}"
     sha256sum "$path" | awk '{print $1}' | grep -Ex "$sha" \
@@ -5594,8 +5620,8 @@ set -u
 
 DST="/usr/local/sbin/tboot-dnf-posttrans"
 DST_REAL="/usr/local/bin/tboot-dnf-posttrans"
-EXP_SHA="35ad8733f190483f1bd6d071d2aa7cb8b1549286f9040086182443c584473cdd"
-EXP_VERSION="tboot-dnf-posttrans 0.1.0-draft-B.2.3-pre-validation"
+EXP_SHA="1e75110935a72fc9433c9b4bf5688d26bc6d3bd1e02f4388b5e1f32ff1e5cc05"
+EXP_VERSION="tboot-dnf-posttrans 1.0.0"
 
 [[ -f "$DST" && ! -L "$DST" ]] || { echo "FAIL: ${DST} invalid"; exit 1; }
 [[ -f "$DST_REAL" && ! -L "$DST_REAL" ]] || { echo "FAIL: ${DST_REAL} invalid"; exit 1; }
@@ -5611,7 +5637,7 @@ dev_dst="$(stat -c '%d' "$DST")"; dev_real="$(stat -c '%d' "$DST_REAL")"
 echo "ok: both paths share inode ${dev_real}:${ino_real}"
 
 stat_line="$(stat -c 'type=%F mode=%a owner=%U:%G size=%s' "$DST_REAL")"
-[[ "$stat_line" == "type=regular file mode=755 owner=root:root size=34927" ]] \
+[[ "$stat_line" == "type=regular file mode=755 owner=root:root size=35164" ]] \
   || { echo "FAIL: installed stat mismatch (got: ${stat_line})"; exit 1; }
 sha256sum "$DST_REAL" | awk '{print $1}' | grep -Ex "$EXP_SHA" || { echo "FAIL: sha drift"; exit 1; }
 [[ -x "$DST_REAL" ]] || { echo "FAIL: not executable"; exit 1; }
@@ -5708,7 +5734,7 @@ selftest_rc=$?
 [[ "$selftest_rc" -eq 0 ]] || { echo "FAIL: --self-test rc=${selftest_rc}"; exit 1; }
 echo "ok: --self-test rc=0"
 
-# Positive contract lines that --self-test MUST emit (per 06F I.5 — helper line excluded).
+# Positive contract lines that --self-test MUST emit (per 06F I.5: helper line excluded).
 for needle in \
   "ok: running as root" \
   "ok: required binaries present" \
@@ -5746,10 +5772,10 @@ scratch_after="$(find /run -maxdepth 1 -name 'tboot-dnf-posttrans.*' -type d 2>/
 
 # Frozen artifact invariants (helper sha verified here, not via --self-test output).
 for tuple in \
-  '/usr/local/bin/tboot-dnf-posttrans:35ad8733f190483f1bd6d071d2aa7cb8b1549286f9040086182443c584473cdd' \
-  '/etc/kernel/install.d/80-tpm2-sign.install:a455444a54f5be265f822d85f4681cba8ed5365a4323c9008835022f3b8c502f' \
-  '/usr/local/sbin/tboot-dnf-helper:4bef223925d3a2520e692403f0c0dd8a932770ec17136008a3d5f6f0b2620f4b' \
-  '/usr/local/sbin/tboot-predict-pcr11:2d4985fa27726efff50bd91ba33ed1dd6e516fe2dd7350a48c73369b61aff160' \
+  '/usr/local/bin/tboot-dnf-posttrans:1e75110935a72fc9433c9b4bf5688d26bc6d3bd1e02f4388b5e1f32ff1e5cc05' \
+  '/etc/kernel/install.d/80-tpm2-sign.install:5857e51d5551e05a7ca384f71529ec2fef07f5a6dbe40df70c6bbe49d720947e' \
+  '/usr/local/sbin/tboot-dnf-helper:937afc7a0d199bf7b7d1a5f5bcccf45c37c0f4f7dd0ad924b2567c4da7125e44' \
+  '/usr/local/sbin/tboot-predict-pcr11:b729ec271dd76cd8b4581f16c86e50fc28b947f2a1de5a7e16c6d5828591e3de' \
   "/boot/efi/EFI/Linux/0123456789abcdef0123456789abcdef-6.19.14-200.fc43.x86_64.efi:b6002e666afdf71e5a083311295ac6a5f3ef3b443ceb4ec8c16c9ddb41077943"; do
     path="${tuple%%:*}"; sha="${tuple##*:}"
     sha256sum "$path" | awk '{print $1}' | grep -Ex "$sha" \
@@ -5793,7 +5819,7 @@ prime_output="$("$DST" --prime 2>&1)"
 prime_rc=$?
 [[ "$prime_rc" -eq 0 ]] || { echo "FAIL: --prime rc=${prime_rc}"; printf '%s\n' "$prime_output"; exit 1; }
 
-# Positive contract lines (prime mode DOES emit the helper line — see 06F I.5).
+# Positive contract lines (prime mode DOES emit the helper line: see 06F I.5).
 for needle in \
   "ok: running as root" \
   "ok: required binaries present" \
@@ -5877,7 +5903,7 @@ scratch_after="$(find /run -maxdepth 1 -name 'tboot-dnf-posttrans.*' -type d 2>/
 n_actions="$(find /etc/dnf/libdnf5-plugins/actions.d/ -maxdepth 1 -name '*.actions' -type f | wc -l)"
 [ "$n_actions" -eq 0 ] || { echo "FAIL: .actions appeared"; exit 1; }
 
-echo "=== sub-gate 3.6 PASS — baseline primed ==="
+echo "=== sub-gate 3.6 PASS: baseline primed ==="
 echo "  baseline path:     ${BASELINE_FILE}"
 echo "  baseline sha256:   ${bf_sha}"
 echo "  baseline size:     ${bf_size} bytes"
@@ -5892,7 +5918,7 @@ EOF
 ### Sub-gate 3.7: Post-prime cross-validation (single `--debug-print`)
 
 > [!important] Single `--debug-print` invocation; subshell + tempfile rc capture
-> Per `06F` I.7: do NOT run `--debug-print` multiple times. Do NOT capture exit codes via `output=$(CMD 2>&1 || true)` — `|| true` masks failures. The correct pattern is a subshell with separate stdout/stderr files and an `echo $? > rc_file` line inside the same subshell, parsed afterwards with `dbg_rc="$(cat "$dbg_rc_file")"`.
+> Per `06F` I.7: do NOT run `--debug-print` multiple times. Do NOT capture exit codes via `output=$(CMD 2>&1 || true)`: `|| true` masks failures. The correct pattern is a subshell with separate stdout/stderr files and an `echo $? > rc_file` line inside the same subshell, parsed afterwards with `dbg_rc="$(cat "$dbg_rc_file")"`.
 
 ```bash
 bash <<'EOF'
@@ -5907,10 +5933,10 @@ LAST_ERROR_FILE="${STATE_DIR}/last-error"
 HELPER_TAG="tboot-dnf-helper"
 JOURNAL_TAG="tboot-dnf-posttrans"
 
-# Rebuild-specific expected values — substitute with the values printed by your sub-gate 3.6 run.
+# Rebuild-specific expected values: substitute with the values printed by your sub-gate 3.6 run.
 EXP_BASELINE_SHA="75dc4f5651fc8996d39b545ac0bf7244a2a5888403b0ba0cd448a671daf80160"
 EXP_BASELINE_SIZE=19752
-EXP_DECIDER_VERSION="0.1.0-draft-B.2.3-pre-validation"
+EXP_DECIDER_VERSION="1.0.0"
 
 WORK=""
 TMP_PREFIX="/run/gate37."
@@ -5966,7 +5992,7 @@ installed_version="$("$DST" --version)"
   || { echo "FAIL: installed --version mismatch (got: '${installed_version}')"; exit 1; }
 echo "ok: --version matches last-decision decider_version"
 
-# 3. Single --debug-print with correct rc capture (no || true masking — see 06F I.7).
+# 3. Single --debug-print with correct rc capture (no || true masking: see 06F I.7).
 dbg_stdout_file="${WORK}/debug-stdout"
 dbg_stderr_file="${WORK}/debug-stderr"
 dbg_rc_file="${WORK}/debug-rc"
@@ -6023,7 +6049,7 @@ helper_state_stat="$(stat -c 'mode=%a owner=%U:%G type=%F' /var/lib/tboot-dnf-he
 [[ "$helper_state_stat" == "mode=700 owner=root:root type=directory" ]] \
   || { echo "FAIL: helper state-dir drift"; exit 1; }
 sha256sum /usr/local/sbin/tboot-dnf-helper | awk '{print $1}' \
-  | grep -Ex '4bef223925d3a2520e692403f0c0dd8a932770ec17136008a3d5f6f0b2620f4b' \
+  | grep -Ex '937afc7a0d199bf7b7d1a5f5bcccf45c37c0f4f7dd0ad924b2567c4da7125e44' \
   || { echo "FAIL: helper sha drift"; exit 1; }
 echo "ok: helper not invoked (journal silent, sentinel absent, perms intact, sha unchanged)"
 
@@ -6038,9 +6064,9 @@ echo "ok: 0 .actions; no err: in decider journal slice"
 
 # 9. Frozen artifacts.
 for tuple in \
-  '/usr/local/bin/tboot-dnf-posttrans:35ad8733f190483f1bd6d071d2aa7cb8b1549286f9040086182443c584473cdd' \
-  '/etc/kernel/install.d/80-tpm2-sign.install:a455444a54f5be265f822d85f4681cba8ed5365a4323c9008835022f3b8c502f' \
-  '/usr/local/sbin/tboot-predict-pcr11:2d4985fa27726efff50bd91ba33ed1dd6e516fe2dd7350a48c73369b61aff160' \
+  '/usr/local/bin/tboot-dnf-posttrans:1e75110935a72fc9433c9b4bf5688d26bc6d3bd1e02f4388b5e1f32ff1e5cc05' \
+  '/etc/kernel/install.d/80-tpm2-sign.install:5857e51d5551e05a7ca384f71529ec2fef07f5a6dbe40df70c6bbe49d720947e' \
+  '/usr/local/sbin/tboot-predict-pcr11:b729ec271dd76cd8b4581f16c86e50fc28b947f2a1de5a7e16c6d5828591e3de' \
   "/boot/efi/EFI/Linux/0123456789abcdef0123456789abcdef-6.19.14-200.fc43.x86_64.efi:b6002e666afdf71e5a083311295ac6a5f3ef3b443ceb4ec8c16c9ddb41077943"; do
     path="${tuple%%:*}"; sha="${tuple##*:}"
     sha256sum "$path" | awk '{print $1}' | grep -Ex "$sha" || { echo "FAIL: ${path} sha drift"; exit 1; }
@@ -6050,7 +6076,7 @@ pcr_now="$(tr -d '[:space:]' < /root/tboot-lab/state/expected-pcr11-after-hook-u
   || { echo "FAIL: PCR 11 prediction file changed"; exit 1; }
 echo "ok: 6 frozen-artifact invariants stable"
 
-echo "=== sub-gate 3.7 PASS — post-prime cross-validation ==="
+echo "=== sub-gate 3.7 PASS: post-prime cross-validation ==="
 echo "  baseline sha (stable):     ${bf_sha}"
 echo "  --debug-print rc:          0"
 echo "  --debug-print vs baseline: zero drift (sha=${dbg_norm_sha})"
@@ -6061,7 +6087,7 @@ EOF
 
 ### Sub-gate 3.8: Closure snapshot
 
-#### Sub-gate 3.8a — VM-side final sanity check (read-only)
+#### Sub-gate 3.8a: VM-side final sanity check (read-only)
 
 The 13 read-only checks below confirm the VM is still in the Gate 3.7 closure state before the snapshot is taken on the Proxmox host. Any FAIL halts Gate 3; do not proceed to sub-gate 3.8b.
 
@@ -6070,10 +6096,10 @@ bash <<'EOF'
 set -u
 
 EXP_BASELINE_SHA="75dc4f5651fc8996d39b545ac0bf7244a2a5888403b0ba0cd448a671daf80160"
-EXP_DECIDER_SHA="35ad8733f190483f1bd6d071d2aa7cb8b1549286f9040086182443c584473cdd"
-EXP_HELPER_SHA="4bef223925d3a2520e692403f0c0dd8a932770ec17136008a3d5f6f0b2620f4b"
-EXP_HOOK_SHA="a455444a54f5be265f822d85f4681cba8ed5365a4323c9008835022f3b8c502f"
-EXP_PREDICT_SHA="2d4985fa27726efff50bd91ba33ed1dd6e516fe2dd7350a48c73369b61aff160"
+EXP_DECIDER_SHA="1e75110935a72fc9433c9b4bf5688d26bc6d3bd1e02f4388b5e1f32ff1e5cc05"
+EXP_HELPER_SHA="937afc7a0d199bf7b7d1a5f5bcccf45c37c0f4f7dd0ad924b2567c4da7125e44"
+EXP_HOOK_SHA="5857e51d5551e05a7ca384f71529ec2fef07f5a6dbe40df70c6bbe49d720947e"
+EXP_PREDICT_SHA="b729ec271dd76cd8b4581f16c86e50fc28b947f2a1de5a7e16c6d5828591e3de"
 EXP_UKI_SHA="b6002e666afdf71e5a083311295ac6a5f3ef3b443ceb4ec8c16c9ddb41077943"
 EXP_PCR11="A03EB49C9335D721758AE8AA9C34DA87664C5CAF9FAD7C314C68C038B16435DD"
 UKI_PATH="/boot/efi/EFI/Linux/0123456789abcdef0123456789abcdef-6.19.14-200.fc43.x86_64.efi"
@@ -6141,7 +6167,7 @@ helper_journal="$(journalctl -q -t "$HELPER_TAG" --since "$SINCE" --no-pager 2>/
 [[ ! -e /run/tboot-dnf-posttrans.lock && ! -L /run/tboot-dnf-posttrans.lock ]] \
   || { echo "FAIL: decider lock present"; exit 1; }
 
-echo "=== sub-gate 3.8a PASS — VM 500 in Gate 3.7 closure state, safe to snapshot ==="
+echo "=== sub-gate 3.8a PASS: VM 500 in Gate 3.7 closure state, safe to snapshot ==="
 echo "  baseline SHA:                ${EXP_BASELINE_SHA}"
 echo "  decider SHA:                 ${EXP_DECIDER_SHA}"
 echo "  state-dir count:             3"
@@ -6158,9 +6184,9 @@ echo "  decider lock:                absent"
 EOF
 ```
 
-#### Sub-gate 3.8b — Proxmox-side closure snapshot (simplified)
+#### Sub-gate 3.8b: Proxmox-side closure snapshot (simplified)
 
-Run on the Proxmox host `pve-host`. We do not over-engineer Proxmox thin-pool parsing here — verify thin-pool headroom separately with `lvs` if your lab needs it. The `qm listsnapshot` calls before and after use the simple `tail -12` display rather than tree-prefix-aware parsing.
+Run on the Proxmox host `pve-host`. We do not over-engineer Proxmox thin-pool parsing here: verify thin-pool headroom separately with `lvs` if your lab needs it. The `qm listsnapshot` calls before and after use the simple `tail -12` display rather than tree-prefix-aware parsing.
 
 ```bash
 # [Proxmox host pve-host]
@@ -6181,7 +6207,7 @@ qm status "$VMID"
 
 Inspect the `qm listsnapshot` "after" output to confirm `module5-b2-3-decider-installed-primed` appears in the lineage. Direct-parent relationships are visible in the rendered tree but are not asserted by this command pattern; `module5-b2-2-real-run-validated` remains the deeper rollback anchor regardless of intermediate snapshots. The `qm status` output should show the VM still `running` after the snapshot.
 
-✅ **Sub-gate 3.8 PASS — B.2.3 Gate 3 closed.**
+✅ **Sub-gate 3.8 PASS: B.2.3 Gate 3 closed.**
 
 ### Expected output (Step 32 overall)
 
@@ -6191,15 +6217,15 @@ Inspect the `qm listsnapshot` "after" output to confirm `module5-b2-3-decider-in
 - Sub-gate 3.3: `=== sub-gate 3.3 PASS ===` with inode identity, --version, --help, and negative invariants.
 - Sub-gate 3.4: `=== sub-gate 3.4 PASS ===` with state-dir path, mode, empty, fs dev.
 - Sub-gate 3.5: `=== sub-gate 3.5 PASS ===` with --self-test rc=0, the five expected lines, no err:, journald cross-check, scratch+lock+state-dir unchanged, frozen artifacts stable.
-- Sub-gate 3.6: `=== sub-gate 3.6 PASS — baseline primed ===` with the rebuild-specific baseline sha, size, state-dir entry count 3, helper invoked NO, sentinel set NO.
-- Sub-gate 3.7: `=== sub-gate 3.7 PASS — post-prime cross-validation ===` with baseline sha stable, --debug-print rc=0, zero-drift sha match, state-dir not mutated, helper not invoked.
-- Sub-gate 3.8: `=== sub-gate 3.8 PASS — B.2.3 Gate 3 closed ===` with snapshot name, parent anchor, VM status running.
+- Sub-gate 3.6: `=== sub-gate 3.6 PASS: baseline primed ===` with the rebuild-specific baseline sha, size, state-dir entry count 3, helper invoked NO, sentinel set NO.
+- Sub-gate 3.7: `=== sub-gate 3.7 PASS: post-prime cross-validation ===` with baseline sha stable, --debug-print rc=0, zero-drift sha match, state-dir not mutated, helper not invoked.
+- Sub-gate 3.8: `=== sub-gate 3.8 PASS: B.2.3 Gate 3 closed ===` with snapshot name, parent anchor, VM status running.
 
 ### Stop condition
 
 - Sub-gate 3.0 FAIL (any of 12 ok checks): VM is not in B.2.2 closure state. Halt; do not proceed. Investigate which invariant moved.
 - Sub-gate 3.1 FAIL (staged file missing or sha drift): re-run Step 31 (Gate 2) to re-stage the decider. Do not bypass.
-- Sub-gate 3.2 FAIL (UsrMerge resolution unexpected, install failed, sha mismatch post-publish): the trap cleans the temp; investigate the assertion that fired. If `/usr/local/sbin` does not resolve to `/usr/local/bin`, halt — the lab layout has drifted from Fedora 43 defaults.
+- Sub-gate 3.2 FAIL (UsrMerge resolution unexpected, install failed, sha mismatch post-publish): the trap cleans the temp; investigate the assertion that fired. If `/usr/local/sbin` does not resolve to `/usr/local/bin`, halt: the lab layout has drifted from Fedora 43 defaults.
 - Sub-gate 3.3 FAIL (inode mismatch, --version mismatch, --help missing flag): the install completed but the installed artefact does not match the expected version. Halt; investigate.
 - Sub-gate 3.4 FAIL (state-dir not created with correct mode, or different fs from parent): halt; do not proceed to --prime.
 - Sub-gate 3.5 FAIL (--self-test rc!=0, expected lines missing, scratch/lock leak): the decider has a runtime preflight issue. Halt; do not run --prime.
@@ -6213,34 +6239,34 @@ Inspect the `qm listsnapshot` "after" output to confirm `module5-b2-3-decider-in
 
 ### Step 32 closure (recorded in attempt log, not in this runbook)
 
-The Step 32 closure block, with run timestamps and sub-gate-by-sub-gate output, lives in the Obsidian vault under the B.2.3 attempt-log subtree — not in this runbook. The runbook captures the procedure; the attempt log captures the run.
+The Step 32 closure block, with run timestamps and sub-gate-by-sub-gate output, lives in the Obsidian vault under the B.2.3 attempt-log subtree: not in this runbook. The runbook captures the procedure; the attempt log captures the run.
 
 ✅ **B.2.3 Gate 3 closed.** Decider installed at `/usr/local/sbin/tboot-dnf-posttrans`, state-dir created, baseline primed, `--debug-print` proven deterministic vs baseline (zero drift), closure snapshot `module5-b2-3-decider-installed-primed` taken. Continued in Step 33 (Gates 4–7).
 
 
-## Step 33: Block B.2.3 Gates 4.0–4.3 + 5 + 6A + 6B + 7 — production `.actions` rule install, no-drift validation, B.2.3 closure
+## Step 33: Block B.2.3 Gates 4.0–4.3 + 5 + 6A + 6B + 7: production `.actions` rule install, no-drift validation, B.2.3 closure
 
-**Goal:** Wire the decider installed in Step 32 to real DNF transactions by installing the production `.actions` rule (Gate 1 design-locked shape), then validate the no-drift path end-to-end through two real transactions (one install, one remove); take the B.2.3 closure snapshot. The drift path (decider detects drift → invokes helper) is intentionally NOT exercised here — that is B.2.4. After this step every DNF transaction invokes the decider; blind `dnf update`/`dnf upgrade` stays blocked until B.2.4, and `dnf upgrade systemd*` until B.4/B.5.
+**Goal:** Wire the decider installed in Step 32 to real DNF transactions by installing the production `.actions` rule (Gate 1 design-locked shape), then validate the no-drift path end-to-end through two real transactions (one install, one remove); take the B.2.3 closure snapshot. The drift path (decider detects drift → invokes helper) is intentionally NOT exercised here: that is B.2.4. After this step every DNF transaction invokes the decider; blind `dnf update`/`dnf upgrade` stays blocked until B.2.4, and `dnf upgrade systemd*` until B.4/B.5.
 **Prerequisites:**
 
 - Step 32 closed; closure snapshot `module5-b2-3-decider-installed-primed` taken and visible via `qm listsnapshot 500` on the Proxmox host.
-- Decider installed at `/usr/local/sbin/tboot-dnf-posttrans` (resolved real path `/usr/local/bin/tboot-dnf-posttrans` via Fedora 43 UsrMerge symlink), sha `35ad8733f190483f1bd6d071d2aa7cb8b1549286f9040086182443c584473cdd`, mode 0755 root:root, size 34927 bytes, version `0.1.0-draft-B.2.3-pre-validation`.
+- Decider installed at `/usr/local/sbin/tboot-dnf-posttrans` (resolved real path `/usr/local/bin/tboot-dnf-posttrans` via Fedora 43 UsrMerge symlink), sha `1e75110935a72fc9433c9b4bf5688d26bc6d3bd1e02f4388b5e1f32ff1e5cc05`, mode 0755 root:root, size 35164 bytes, version `1.0.0`.
 - State-dir `/var/lib/tboot-dnf-posttrans/` exists with 3 entries; baseline sha `75dc4f5651fc8996d39b545ac0bf7244a2a5888403b0ba0cd448a671daf80160`, size 19752 bytes.
-- `last-decision` reflects Gate 3 close: `decision=primed`, `epoch=1779645173`, `detail=Gate 3 baseline prime`, `decider_version=0.1.0-draft-B.2.3-pre-validation`.
+- `last-decision` reflects Gate 3 close: `decision=primed`, `epoch=1779645173`, `detail=Gate 3 baseline prime`, `decider_version=1.0.0`.
 - B.2.1 probe rule preserved as disabled artefact: `/etc/dnf/libdnf5-plugins/actions.d/00-tboot-trigger-probe.actions.disabled-after-b21-validation` (regular file, root:root, not active because `libdnf5-plugin-actions` reads only files with the `.actions` suffix).
 - Zero active `.actions` files in `/etc/dnf/libdnf5-plugins/actions.d/`.
 - Booted UKI sha `b6002e666afdf71e5a083311295ac6a5f3ef3b443ceb4ec8c16c9ddb41077943` at `/boot/efi/EFI/Linux/${MID}-6.19.14-200.fc43.x86_64.efi`; runtime PCR 11 byte-matches stored prediction `A03EB49C9335D721758AE8AA9C34DA87664C5CAF9FAD7C314C68C038B16435DD`.
 
 **Where to run:** All sub-gates run as `root` on VM 500 (`tboot-lab`) inside `tmux`, except Gate 4.0's snapshot-lineage visual confirmation and Gate 7 Phase 2's `qm snapshot` + `qm listsnapshot`, which run on Proxmox host `pve-host`. VM-side commands are copy-paste `bash <<'EOF' ... EOF` blocks.
 
-**Last validated:** 2026-05-25 — all seven sub-gates closed in sequence; closure snapshot `module5-b2-3-validated`. See Appendix C and `06F` J.1–J.3.
+**Last validated:** 2026-05-25: all seven sub-gates closed in sequence; closure snapshot `module5-b2-3-validated`. See Appendix C and `06F` J.1–J.3.
 
 > [!note] Scripts here are the post-correction canonical form
 > The inlined scripts incorporate the J.1/J.2/J.3 corrections from the live run, so a clean rebuild should not hit those harness bugs. The live-run history and the why are in `06C` and `06F` J.1–J.3.
 
 ---
 
-### Gate 4.0 — read-only preflight + rollback anchor visual confirmation
+### Gate 4.0: read-only preflight + rollback anchor visual confirmation
 
 **Goal.** Verify the VM is in the Step 32 closure state expected, and that the rollback anchor `module5-b2-3-decider-installed-primed` is reachable on the Proxmox host. No mutation.
 
@@ -6252,14 +6278,14 @@ The Step 32 closure block, with run timestamps and sub-gate-by-sub-gate output, 
 bash <<'EOF'
 set -u
 
-EXP_DECIDER_SHA="35ad8733f190483f1bd6d071d2aa7cb8b1549286f9040086182443c584473cdd"
+EXP_DECIDER_SHA="1e75110935a72fc9433c9b4bf5688d26bc6d3bd1e02f4388b5e1f32ff1e5cc05"
 EXP_BASELINE_SHA="75dc4f5651fc8996d39b545ac0bf7244a2a5888403b0ba0cd448a671daf80160"
-EXP_HOOK_SHA="a455444a54f5be265f822d85f4681cba8ed5365a4323c9008835022f3b8c502f"
-EXP_HELPER_SHA="4bef223925d3a2520e692403f0c0dd8a932770ec17136008a3d5f6f0b2620f4b"
-EXP_PREDICT_SHA="2d4985fa27726efff50bd91ba33ed1dd6e516fe2dd7350a48c73369b61aff160"
+EXP_HOOK_SHA="5857e51d5551e05a7ca384f71529ec2fef07f5a6dbe40df70c6bbe49d720947e"
+EXP_HELPER_SHA="937afc7a0d199bf7b7d1a5f5bcccf45c37c0f4f7dd0ad924b2567c4da7125e44"
+EXP_PREDICT_SHA="b729ec271dd76cd8b4581f16c86e50fc28b947f2a1de5a7e16c6d5828591e3de"
 EXP_UKI_SHA="b6002e666afdf71e5a083311295ac6a5f3ef3b443ceb4ec8c16c9ddb41077943"
 EXP_PCR11="A03EB49C9335D721758AE8AA9C34DA87664C5CAF9FAD7C314C68C038B16435DD"
-EXP_DECIDER_VERSION="0.1.0-draft-B.2.3-pre-validation"
+EXP_DECIDER_VERSION="1.0.0"
 EXP_GATE3_DECISION_EPOCH="1779645173"   # last-decision epoch at Gate 3 close
 
 DECIDER="/usr/local/sbin/tboot-dnf-posttrans"
@@ -6393,7 +6419,7 @@ Followed on the host by a snapshot tree showing `module5-b2-3-decider-installed-
 
 ---
 
-### Gate 4.1 — author and stage the production `.actions` rule
+### Gate 4.1: author and stage the production `.actions` rule
 
 **Goal.** Write the production rule file to `/tmp/50-tboot-posttrans.actions.staged` with the Gate 1 design-locked shape. Verify the staged file's identity (path, size, mode, owner, sha). No install yet.
 
@@ -6414,7 +6440,7 @@ EXP_PRODRULE_SIZE=87
 # 421. running as root
 [ "$(id -u)" -eq 0 ] || { echo "FAIL 421: must run as root"; exit 421; }
 
-# 422. no stale staged file — hard absence + symlink-rejection check before any write.
+# 422. no stale staged file: hard absence + symlink-rejection check before any write.
 #      The previous design allowed overwrite on an existing path. That is not symlink-safe
 #      (a planted symlink at the staged path would redirect the heredoc write to an
 #      attacker-controlled target). The trust boundary requires the staged path to be
@@ -6486,13 +6512,13 @@ EOF
 
 **Closure criteria.** Staged file sha byte-matches the Gate 1 design-locked value. Proceed to Gate 4.2.
 
-**Stop condition.** Any FAIL 42x — most likely sha drift caused by smart-quote substitution or a shell that interprets the heredoc differently. Verify the shell is `bash`, the heredoc tag is single-quoted (`'TBOOT_RULE_EOF'`), and the body is the exact ASCII string. Re-run Gate 4.1.
+**Stop condition.** Any FAIL 42x: most likely sha drift caused by smart-quote substitution or a shell that interprets the heredoc differently. Verify the shell is `bash`, the heredoc tag is single-quoted (`'TBOOT_RULE_EOF'`), and the body is the exact ASCII string. Re-run Gate 4.1.
 
 ---
 
-### Gate 4.2 — staged-rule external read-back validation against Gate 1 design lock
+### Gate 4.2: staged-rule external read-back validation against Gate 1 design lock
 
-**Goal.** Parse the staged rule into its 5 fields (`callback_name`, `package_filter`, `direction`, `options`, `command`) and assert each against the Gate 1 design lock. Apply the Deviation D regex scan for forbidden tokens (defence in depth — the rule should contain none).
+**Goal.** Parse the staged rule into its 5 fields (`callback_name`, `package_filter`, `direction`, `options`, `command`) and assert each against the Gate 1 design lock. Apply the Deviation D regex scan for forbidden tokens (defence in depth: the rule should contain none).
 
 **Mutation scope.** None. Read-only.
 
@@ -6514,7 +6540,7 @@ EXP_COMMAND="/usr/local/sbin/tboot-dnf-posttrans"
 [ -f "$STAGED" ] && [ ! -L "$STAGED" ] \
   || { echo "FAIL 441: staged file missing"; exit 441; }
 
-# 442. read the single rule line into 5 fields, split by ':' but careful —
+# 442. read the single rule line into 5 fields, split by ':' but careful:
 #      the design-locked rule has empty package_filter and empty direction, so
 #      the colon-delimited structure is: callback:pkg:direction:options:command
 #      Use awk with FS=":" and capture exactly 5 fields. Anything else is a shape violation.
@@ -6533,7 +6559,7 @@ ACT_PKG="$(awk -F':' '{print $2}' <<<"$ACT_RULE")"
 [ "$ACT_PKG" = "$EXP_PKG_FILTER" ] \
   || { echo "FAIL 444: package_filter = '$ACT_PKG' (expected empty)"; exit 444; }
 
-# 445. direction (must be empty — fires on both inbound and outbound transactions)
+# 445. direction (must be empty: fires on both inbound and outbound transactions)
 ACT_DIR="$(awk -F':' '{print $3}' <<<"$ACT_RULE")"
 [ "$ACT_DIR" = "$EXP_DIRECTION" ] \
   || { echo "FAIL 445: direction = '$ACT_DIR' (expected empty)"; exit 445; }
@@ -6548,7 +6574,7 @@ ACT_CMD="$(awk -F':' '{print $5}' <<<"$ACT_RULE")"
 [ "$ACT_CMD" = "$EXP_COMMAND" ] \
   || { echo "FAIL 447: command = '$ACT_CMD' (expected '$EXP_COMMAND')"; exit 447; }
 
-# 448. Deviation D regex scan — forbidden tokens absent (defence in depth)
+# 448. Deviation D regex scan: forbidden tokens absent (defence in depth)
 #      The rule must invoke the decider, not any signing tool directly.
 FORBIDDEN="ukify sbsign sbverify systemd-measure systemd-cryptenroll efi-updatevar cryptsetup"
 for tok in $FORBIDDEN; do
@@ -6590,7 +6616,7 @@ EOF
 
 ---
 
-### Gate 4.3 — pre-install negative preconditions
+### Gate 4.3: pre-install negative preconditions
 
 **Goal.** Confirm `/etc/dnf/libdnf5-plugins/actions.d/` is empty of any active rule, that the disabled B.2.1 probe is preserved as a non-active artefact, and that `actions.d/` and its parent `plugins/` are on the same filesystem (required for the Gate 5 atomic `mv -T`).
 
@@ -6667,11 +6693,11 @@ EOF
 
 **Closure criteria.** All 8 preconditions PASS. Proceed to Gate 5.
 
-**Stop condition.** Any FAIL 45x. The same-filesystem assertion (457) is the most important — if it fails, the atomic publish in Gate 5 will not be atomic, and Step 33 must halt until the filesystem layout is corrected.
+**Stop condition.** Any FAIL 45x. The same-filesystem assertion (457) is the most important: if it fails, the atomic publish in Gate 5 will not be atomic, and Step 33 must halt until the filesystem layout is corrected.
 
 ---
 
-### Gate 5 — atomic publish of the production `.actions` rule
+### Gate 5: atomic publish of the production `.actions` rule
 
 **Goal.** Publish the staged rule from `/tmp/50-tboot-posttrans.actions.staged` to `/etc/dnf/libdnf5-plugins/actions.d/50-tboot-posttrans.actions` atomically: `mktemp` inside `actions.d/`, `install -m 0644 -o root -g root` the staged content into the temp, then `mv -T` the temp to the production path. From this point onward, every DNF transaction invokes the decider.
 
@@ -6705,7 +6731,7 @@ STAGE_SHA="$(sha256sum "$STAGED" | awk '{print $1}')"
 [ ! -e "$DST" ] && [ ! -L "$DST" ] \
   || { echo "FAIL 503: dst already present pre-publish"; exit 503; }
 
-# 503b. defence in depth — re-verify zero active *.actions before the mutation window.
+# 503b. defence in depth: re-verify zero active *.actions before the mutation window.
 #       Gate 4.0 already checked this, but `actions.d/` is a directory that any other
 #       process could have written into between Gate 4.0 and Gate 5. The atomic publish
 #       must not be the first thing that breaks the "exactly one production rule"
@@ -6733,11 +6759,11 @@ TMP_SHA="$(sha256sum "$TMP" | awk '{print $1}')"
 [ "$TMP_SHA" = "$EXP_PRODRULE_SHA" ] \
   || { echo "FAIL 506: TMP sha drift ($TMP_SHA)"; exit 506; }
 
-# 507. atomic rename — mv -T overwrites DST atomically (or fails atomically)
+# 507. atomic rename: mv -T overwrites DST atomically (or fails atomically)
 mv -T -- "$TMP" "$DST" \
   || { echo "FAIL 507: mv -T rc=$?"; exit 507; }
 
-# trap can be disarmed now — TMP was consumed by mv -T
+# trap can be disarmed now: TMP was consumed by mv -T
 trap - EXIT
 
 # 508. post-publish: dst sha + size + mode + owner
@@ -6792,17 +6818,17 @@ EOF
 
 **Closure criteria.** Production rule published, sha matches design lock, exactly 1 active `*.actions` entry, helper not invoked by the install operation itself. Proceed to Gate 6A.
 
-**Stop condition.** Any FAIL 5xx. If the trap fires on FAIL 506 or 507, the dst is still absent — system is at "0 active `.actions`" state (same as pre-Gate-5). Retry by re-running Gate 5. If FAIL 508+ (post-rename), the dst exists but is wrong; do not run any DNF command until the production rule is repaired or removed.
+**Stop condition.** Any FAIL 5xx. If the trap fires on FAIL 506 or 507, the dst is still absent: system is at "0 active `.actions`" state (same as pre-Gate-5). Retry by re-running Gate 5. If FAIL 508+ (post-rename), the dst exists but is wrong; do not run any DNF command until the production rule is repaired or removed.
 
 **Snapshot point.** None. Gate 6A and Gate 6B run against the rollback anchor `module5-b2-3-decider-installed-primed`; the first new snapshot is taken at Gate 7 close.
 
 ---
 
-### Gate 6A — `dnf install -y figlet` no-drift validation
+### Gate 6A: `dnf install -y figlet` no-drift validation
 
 **Goal.** Run one real inbound DNF transaction that adds a package with no boot-relevant content. The decider must fire exactly once, compute the manifest, compare against baseline, find zero drift, exit 0 with `decision=unchanged`, and write a fresh `last-decision`. The helper must not be invoked; the sentinel must not be written; the baseline must not be updated; the 6 boot-artefact shas plus runtime PCR 11 must remain byte-stable.
 
-**Mutation scope.** One RPM transaction: `figlet 2.2.5-38.fc43.x86_64` installed. Plus the decider's state-dir writes: `last-computed-manifest` (sha unchanged = baseline) and `last-decision` (new epoch/date/compute_duration_s). Decider lock acquired and released (file persists; `flock` released — see `06F` J.3). Decider journal entries under `tboot-dnf-posttrans`. DNF log entries.
+**Mutation scope.** One RPM transaction: `figlet 2.2.5-38.fc43.x86_64` installed. Plus the decider's state-dir writes: `last-computed-manifest` (sha unchanged = baseline) and `last-decision` (new epoch/date/compute_duration_s). Decider lock acquired and released (file persists; `flock` released: see `06F` J.3). Decider journal entries under `tboot-dnf-posttrans`. DNF log entries.
 
 Not mutated: baseline (no helper success on no-drift); `last-error` (no error); sentinel; helper lock; helper state-dir; `/etc/kernel/*`; production rule; booted UKI; initramfs; PCR 11; Secure Boot; LUKS.
 
@@ -6815,15 +6841,15 @@ bash <<'EOF'
 set -u
 
 # Frozen constants
-EXP_DECIDER_SHA="35ad8733f190483f1bd6d071d2aa7cb8b1549286f9040086182443c584473cdd"
+EXP_DECIDER_SHA="1e75110935a72fc9433c9b4bf5688d26bc6d3bd1e02f4388b5e1f32ff1e5cc05"
 EXP_BASELINE_SHA="75dc4f5651fc8996d39b545ac0bf7244a2a5888403b0ba0cd448a671daf80160"
 EXP_PRODRULE_SHA="dfbffe56fa95f4e0231569bb3a1aabc8952b9f99c9d290e4f8fb1005ef90d798"
-EXP_HOOK_SHA="a455444a54f5be265f822d85f4681cba8ed5365a4323c9008835022f3b8c502f"
-EXP_HELPER_SHA="4bef223925d3a2520e692403f0c0dd8a932770ec17136008a3d5f6f0b2620f4b"
-EXP_PREDICT_SHA="2d4985fa27726efff50bd91ba33ed1dd6e516fe2dd7350a48c73369b61aff160"
+EXP_HOOK_SHA="5857e51d5551e05a7ca384f71529ec2fef07f5a6dbe40df70c6bbe49d720947e"
+EXP_HELPER_SHA="937afc7a0d199bf7b7d1a5f5bcccf45c37c0f4f7dd0ad924b2567c4da7125e44"
+EXP_PREDICT_SHA="b729ec271dd76cd8b4581f16c86e50fc28b947f2a1de5a7e16c6d5828591e3de"
 EXP_UKI_SHA="b6002e666afdf71e5a083311295ac6a5f3ef3b443ceb4ec8c16c9ddb41077943"
 EXP_PCR11="A03EB49C9335D721758AE8AA9C34DA87664C5CAF9FAD7C314C68C038B16435DD"
-EXP_DECIDER_VERSION="0.1.0-draft-B.2.3-pre-validation"
+EXP_DECIDER_VERSION="1.0.0"
 
 UKI_PATH="/boot/efi/EFI/Linux/0123456789abcdef0123456789abcdef-6.19.14-200.fc43.x86_64.efi"
 INITRAMFS_PATH="/boot/initramfs-6.19.14-200.fc43.x86_64.img"
@@ -6903,7 +6929,7 @@ echo "=== Gate 6A Phase 1: pre-transaction reference capture 12/12 PASS ==="
 PRE_TIME_6A="$(date -Iseconds)"
 PRE_TIME_6A_EPOCH="$(date -d "$PRE_TIME_6A" +%s)"
 
-# ===== Phase 2: single mutation — dnf install -y figlet =====
+# ===== Phase 2: single mutation: dnf install -y figlet =====
 
 DNF_RC=0
 dnf install -y figlet || DNF_RC=$?
@@ -7025,15 +7051,15 @@ EOF
 
 **Live-run note (2026-05-25).** The original Gate 6A verifier ran with a `/var/log/dnf5.log` timestamp-bound grep (check 183 in the original numbering) and a "decider lock path absent" invariant (check 197). Both FAILed despite the transaction itself succeeding (figlet installed, decider clearly fired per its journald stream). Diagnostic showed:
 
-- `/var/log/dnf5.log` contained zero `Loaded libdnf plugin` entries — recorded as `06F` J.1.
-- `date -Iseconds` and `dnf5.log` use incompatible TZ-offset formats (`+02:00` vs `+0200`) — recorded as `06F` J.2.
-- `/run/tboot-dnf-posttrans.lock` persisted as a 0-byte root:root 0644 file after the decider exited; `fuser -v` confirmed no current holder; `flock -n` confirmed not actively held — recorded as `06F` J.3.
+- `/var/log/dnf5.log` contained zero `Loaded libdnf plugin` entries: recorded as `06F` J.1.
+- `date -Iseconds` and `dnf5.log` use incompatible TZ-offset formats (`+02:00` vs `+0200`): recorded as `06F` J.2.
+- `/run/tboot-dnf-posttrans.lock` persisted as a 0-byte root:root 0644 file after the decider exited; `fuser -v` confirmed no current holder; `flock -n` confirmed not actively held: recorded as `06F` J.3.
 
 The script above is the post-correction canonical form, free of all three pitfalls. The original FAIL trace and the two-step correction sequence are preserved in the Obsidian B.2.3 attempt-log subtree.
 
 ---
 
-### Gate 6B — `dnf remove -y figlet` no-drift validation (symmetric)
+### Gate 6B: `dnf remove -y figlet` no-drift validation (symmetric)
 
 **Goal.** Symmetric to Gate 6A. One real outbound DNF transaction removes the package installed in Gate 6A. The decider must again fire exactly once on the same no-drift path. This validates that the production rule's empty `direction:` field fires on outbound transactions as the man page documents.
 
@@ -7049,15 +7075,15 @@ Not mutated: baseline, last-error, sentinel, helper lock, helper state-dir, `/et
 bash <<'EOF'
 set -u
 
-EXP_DECIDER_SHA="35ad8733f190483f1bd6d071d2aa7cb8b1549286f9040086182443c584473cdd"
+EXP_DECIDER_SHA="1e75110935a72fc9433c9b4bf5688d26bc6d3bd1e02f4388b5e1f32ff1e5cc05"
 EXP_BASELINE_SHA="75dc4f5651fc8996d39b545ac0bf7244a2a5888403b0ba0cd448a671daf80160"
 EXP_PRODRULE_SHA="dfbffe56fa95f4e0231569bb3a1aabc8952b9f99c9d290e4f8fb1005ef90d798"
-EXP_HOOK_SHA="a455444a54f5be265f822d85f4681cba8ed5365a4323c9008835022f3b8c502f"
-EXP_HELPER_SHA="4bef223925d3a2520e692403f0c0dd8a932770ec17136008a3d5f6f0b2620f4b"
-EXP_PREDICT_SHA="2d4985fa27726efff50bd91ba33ed1dd6e516fe2dd7350a48c73369b61aff160"
+EXP_HOOK_SHA="5857e51d5551e05a7ca384f71529ec2fef07f5a6dbe40df70c6bbe49d720947e"
+EXP_HELPER_SHA="937afc7a0d199bf7b7d1a5f5bcccf45c37c0f4f7dd0ad924b2567c4da7125e44"
+EXP_PREDICT_SHA="b729ec271dd76cd8b4581f16c86e50fc28b947f2a1de5a7e16c6d5828591e3de"
 EXP_UKI_SHA="b6002e666afdf71e5a083311295ac6a5f3ef3b443ceb4ec8c16c9ddb41077943"
 EXP_PCR11="A03EB49C9335D721758AE8AA9C34DA87664C5CAF9FAD7C314C68C038B16435DD"
-EXP_DECIDER_VERSION="0.1.0-draft-B.2.3-pre-validation"
+EXP_DECIDER_VERSION="1.0.0"
 
 # Read Gate 6A's last-decision epoch from disk (captured at Gate 6A close).
 # In a fresh rebuild, this will be the epoch from the immediately preceding Gate 6A run.
@@ -7130,7 +7156,7 @@ echo "=== Gate 6B Phase 1: pre-remove reference capture 13/13 PASS ==="
 PRE_TIME_6B="$(date -Iseconds)"
 PRE_TIME_6B_EPOCH="$(date -d "$PRE_TIME_6B" +%s)"
 
-# Phase 2: single mutation — dnf remove -y figlet
+# Phase 2: single mutation: dnf remove -y figlet
 DNF_RC=0
 dnf remove -y figlet || DNF_RC=$?
 
@@ -7231,11 +7257,11 @@ EOF
 
 **Closure criteria.** dnf rc=0 + figlet removed + decider fired exactly once + decision=unchanged + helper not invoked + baseline not updated + boot artefacts byte-stable + new last-decision epoch strictly greater than Gate 6A's. Proceed to Gate 7.
 
-**Stop condition.** Any FAIL 6xx. Capture state and rollback to `module5-b2-3-decider-installed-primed`; both Gate 6A and Gate 6B effects are wiped on rollback (intentional — neither was snapshotted).
+**Stop condition.** Any FAIL 6xx. Capture state and rollback to `module5-b2-3-decider-installed-primed`; both Gate 6A and Gate 6B effects are wiped on rollback (intentional: neither was snapshotted).
 
 ---
 
-### Gate 7 — B.2.3 closure snapshot
+### Gate 7: B.2.3 closure snapshot
 
 **Goal.** Take the closure snapshot `module5-b2-3-validated` on the Proxmox host. Three phases: VM-side final sanity check (read-only), Proxmox-host snapshot (mutation on the host, not the VM), VM-side post-snapshot health (read-only).
 
@@ -7249,12 +7275,12 @@ EOF
 bash <<'EOF'
 set -u
 
-EXP_DECIDER_SHA="35ad8733f190483f1bd6d071d2aa7cb8b1549286f9040086182443c584473cdd"
+EXP_DECIDER_SHA="1e75110935a72fc9433c9b4bf5688d26bc6d3bd1e02f4388b5e1f32ff1e5cc05"
 EXP_BASELINE_SHA="75dc4f5651fc8996d39b545ac0bf7244a2a5888403b0ba0cd448a671daf80160"
 EXP_PRODRULE_SHA="dfbffe56fa95f4e0231569bb3a1aabc8952b9f99c9d290e4f8fb1005ef90d798"
-EXP_HOOK_SHA="a455444a54f5be265f822d85f4681cba8ed5365a4323c9008835022f3b8c502f"
-EXP_HELPER_SHA="4bef223925d3a2520e692403f0c0dd8a932770ec17136008a3d5f6f0b2620f4b"
-EXP_PREDICT_SHA="2d4985fa27726efff50bd91ba33ed1dd6e516fe2dd7350a48c73369b61aff160"
+EXP_HOOK_SHA="5857e51d5551e05a7ca384f71529ec2fef07f5a6dbe40df70c6bbe49d720947e"
+EXP_HELPER_SHA="937afc7a0d199bf7b7d1a5f5bcccf45c37c0f4f7dd0ad924b2567c4da7125e44"
+EXP_PREDICT_SHA="b729ec271dd76cd8b4581f16c86e50fc28b947f2a1de5a7e16c6d5828591e3de"
 EXP_UKI_SHA="b6002e666afdf71e5a083311295ac6a5f3ef3b443ceb4ec8c16c9ddb41077943"
 EXP_PCR11="A03EB49C9335D721758AE8AA9C34DA87664C5CAF9FAD7C314C68C038B16435DD"
 
@@ -7330,7 +7356,7 @@ EOF
 
 ```
 qm snapshot 500 module5-b2-3-validated \
-  --description "B.2.3 closure: production .actions rule 50-tboot-posttrans.actions installed at /etc/dnf/libdnf5-plugins/actions.d/ (sha dfbffe56fa95f4e0231569bb3a1aabc8952b9f99c9d290e4f8fb1005ef90d798, mode 0644 root:root, 87 bytes); rule shape post_transaction:::enabled=host-only raise_error=1:/usr/local/sbin/tboot-dnf-posttrans (Gate 1 design lock). Decider at /usr/local/sbin/tboot-dnf-posttrans (sha 35ad8733f190483f1bd6d071d2aa7cb8b1549286f9040086182443c584473cdd) + state-dir /var/lib/tboot-dnf-posttrans (root:root 0700) with primed baseline (sha 75dc4f5651fc8996d39b545ac0bf7244a2a5888403b0ba0cd448a671daf80160, 19752 bytes). No-drift path validated end-to-end through two real DNF transactions: dnf install -y figlet (Gate 6A) and dnf remove -y figlet (Gate 6B). Both produced decision=unchanged with detail 'manifest matches baseline; helper not invoked; baseline NOT updated (per design)'. Helper never invoked; sentinel never written; baseline never updated; 6 trust-chain shas + runtime PCR 11 byte-stable; initramfs/ESP UKI mtimes unchanged from B.2.2 closure. Gates 4-7 closed. B.2.4 (live drift-detection through a real dracut-sensitive transaction) still pending. Blind dnf update still blocked. dnf upgrade systemd* still separately blocked (scope of B.4/B.5)."
+  --description "B.2.3 closure: production .actions rule 50-tboot-posttrans.actions installed at /etc/dnf/libdnf5-plugins/actions.d/ (sha dfbffe56fa95f4e0231569bb3a1aabc8952b9f99c9d290e4f8fb1005ef90d798, mode 0644 root:root, 87 bytes); rule shape post_transaction:::enabled=host-only raise_error=1:/usr/local/sbin/tboot-dnf-posttrans (Gate 1 design lock). Decider at /usr/local/sbin/tboot-dnf-posttrans (sha 1e75110935a72fc9433c9b4bf5688d26bc6d3bd1e02f4388b5e1f32ff1e5cc05) + state-dir /var/lib/tboot-dnf-posttrans (root:root 0700) with primed baseline (sha 75dc4f5651fc8996d39b545ac0bf7244a2a5888403b0ba0cd448a671daf80160, 19752 bytes). No-drift path validated end-to-end through two real DNF transactions: dnf install -y figlet (Gate 6A) and dnf remove -y figlet (Gate 6B). Both produced decision=unchanged with detail 'manifest matches baseline; helper not invoked; baseline NOT updated (per design)'. Helper never invoked; sentinel never written; baseline never updated; 6 trust-chain shas + runtime PCR 11 byte-stable; initramfs/ESP UKI mtimes unchanged from B.2.2 closure. Gates 4-7 closed. B.2.4 (live drift-detection through a real dracut-sensitive transaction) still pending. Blind dnf update still blocked. dnf upgrade systemd* still separately blocked (scope of B.4/B.5)."
 
 qm listsnapshot 500
 ```
@@ -7414,13 +7440,13 @@ qm listsnapshot 500
 - Phase 2 visual confirmation fails: do not declare Gate 7 closed even if `qm snapshot` reported success. Triage on host.
 - Phase 3 FAILs 73x: severe. Snapshot operation disturbed the VM. Capture forensics on host and VM; decide whether the new snapshot is trustworthy or should be deleted.
 
-**Snapshot point.** `module5-b2-3-validated` — the B.2.3 closure anchor; preferred rollback target for B.2.4. Parent: `module5-b2-3-decider-installed-primed`.
+**Snapshot point.** `module5-b2-3-validated`: the B.2.3 closure anchor; preferred rollback target for B.2.4. Parent: `module5-b2-3-decider-installed-primed`.
 
 ---
 
 ### Step 33 closure
 
-✅ **B.2.3 closed end-to-end.** Production `.actions` rule live; decider invoked on every DNF transaction; no-drift path validated in both directions (install + remove); closure snapshot `module5-b2-3-validated` taken. **At the time of Step 33 closure, B.2.4 was pending and blind `dnf update` / `dnf upgrade` remained blocked pending B.2.4 closure.** B.2.4 was subsequently closed end-to-end via **Steps 34–37 below** (Gates 1–3 in Step 34 — positive drift transaction `dnf install -y dracut-network`; Gates 4–5 in Step 35 — pre-reboot cross-validation + pre-reboot snapshot `module5-b2-4-pre-reboot`; Gates 6A–6B in Step 36 — reboot with no LUKS passphrase prompt + post-reboot validation 28/28 PASS, runtime PCR 11 = `28E66CE2…C90F` byte-matched stored prediction; Gate 7 in Step 37 — closure snapshot `module5-b2-4-validated` + read-only ESP audit + staged DNF discipline lift). **`dnf upgrade systemd*` remains separately blocked** (scope of B.4 / B.5, not B.2.3 / B.2.4).
+✅ **B.2.3 closed end-to-end.** Production `.actions` rule live; decider invoked on every DNF transaction; no-drift path validated in both directions (install + remove); closure snapshot `module5-b2-3-validated` taken. **At the time of Step 33 closure, B.2.4 was pending and blind `dnf update` / `dnf upgrade` remained blocked pending B.2.4 closure.** B.2.4 was subsequently closed end-to-end via **Steps 34–37 below** (Gates 1–3 in Step 34: positive drift transaction `dnf install -y dracut-network`; Gates 4–5 in Step 35: pre-reboot cross-validation + pre-reboot snapshot `module5-b2-4-pre-reboot`; Gates 6A–6B in Step 36: reboot with no LUKS passphrase prompt + post-reboot validation 28/28 PASS, runtime PCR 11 = `28E66CE2…C90F` byte-matched stored prediction; Gate 7 in Step 37: closure snapshot `module5-b2-4-validated` + read-only ESP audit + staged DNF discipline lift). **`dnf upgrade systemd*` remains separately blocked** (scope of B.4 / B.5, not B.2.3 / B.2.4).
 
 From this point onward, every DNF transaction invokes the decider. The decider's no-drift path is validated. The drift path (detect drift → write sentinel → invoke helper → update baseline on helper success → clear sentinel) remains B.2.4's job.
 
@@ -7439,7 +7465,7 @@ The architectural-invariants table and the trust-boundary (Deviation D) regex ar
 
 ---
 
-## Step 34: Block B.2.4 Gates 1–3 — live drift-detection through a real dracut-sensitive transaction
+## Step 34: Block B.2.4 Gates 1–3: live drift-detection through a real dracut-sensitive transaction
 
 **Goal:** validate the positive drift branch end-to-end on a live system. One scoped `dnf install` of a known-not-installed, dracut-sensitive, trust-chain-safe candidate (`dracut-network`) must (a) fire the production `.actions` rule, (b) drive the decider into the drift branch, (c) sentinel-then-invoke-then-clear the helper, (d) cause `dracut` + `kernel-install add` + the `80-tpm2-sign.install` hook to run for every enumerated kernel, (e) atomically replace the baseline manifest with the post-helper computed manifest, (f) advance the stored PCR 11 prediction file (mtime always; value if dracut autodetect pulls the candidate's module into the host-only initramfs). Reboot validation is the scope of a later step (B.2.4 Gates 4–7), not Step 34.
 **Prerequisites:** Step 33 (B.2.3 Gates 4.0–7) closed; rollback anchor `module5-b2-3-validated` on Proxmox host pve-host.
@@ -7454,7 +7480,7 @@ The architectural-invariants table and the trust-boundary (Deviation D) regex ar
 > [!info] Helper scratch path
 > The helper creates its per-invocation scratch directory under `/run/tboot-helper-XXXXXX` (e.g. observed at Gate 3: `/run/tboot-helper-Uvj19o`). The decider's scratch directory pattern is `/run/tboot-dnf-posttrans.XXXXXX` (different prefix, different separator).
 
-### Commands — Gate 1: candidate selection + read-only preflight
+### Commands: Gate 1: candidate selection + read-only preflight
 
 No persistent trust-chain mutation. Expected and accepted: temporary files under `/tmp`; journald entries under tags `tboot-dnf-posttrans` and `tboot-dnf-helper`; DNF metadata *read* from existing local cache (no `--refresh`); `dnf install --assumeno` resolves a transaction plan and aborts at the prompt (no commit, no `post_transaction` rule fires); helper lock acquisition + release; helper scratch dir under `/run/tboot-helper-XXXXXX`. Asserted byte-stable: baseline, last-computed-manifest, last-decision, last-error absence, decider state-dir entry count, helper state-dir digest, sentinel absence, booted UKI / initramfs / PCR 11 prediction file mtimes, production rule. Rollback not required (read-only).
 
@@ -7463,19 +7489,19 @@ bash <<'EOF'
 set -u
 
 # ============================================================================
-# B.2.4 Gate 1 — candidate selection + read-only preflight
+# B.2.4 Gate 1: candidate selection + read-only preflight
 # ============================================================================
 
-EXP_DECIDER_SHA="35ad8733f190483f1bd6d071d2aa7cb8b1549286f9040086182443c584473cdd"
+EXP_DECIDER_SHA="1e75110935a72fc9433c9b4bf5688d26bc6d3bd1e02f4388b5e1f32ff1e5cc05"
 EXP_BASELINE_SHA="75dc4f5651fc8996d39b545ac0bf7244a2a5888403b0ba0cd448a671daf80160"
 EXP_PRODRULE_SHA="dfbffe56fa95f4e0231569bb3a1aabc8952b9f99c9d290e4f8fb1005ef90d798"
-EXP_HOOK_SHA="a455444a54f5be265f822d85f4681cba8ed5365a4323c9008835022f3b8c502f"
-EXP_HELPER_SHA="4bef223925d3a2520e692403f0c0dd8a932770ec17136008a3d5f6f0b2620f4b"
-EXP_PREDICT_SHA="2d4985fa27726efff50bd91ba33ed1dd6e516fe2dd7350a48c73369b61aff160"
+EXP_HOOK_SHA="5857e51d5551e05a7ca384f71529ec2fef07f5a6dbe40df70c6bbe49d720947e"
+EXP_HELPER_SHA="937afc7a0d199bf7b7d1a5f5bcccf45c37c0f4f7dd0ad924b2567c4da7125e44"
+EXP_PREDICT_SHA="b729ec271dd76cd8b4581f16c86e50fc28b947f2a1de5a7e16c6d5828591e3de"
 EXP_UKI_SHA="b6002e666afdf71e5a083311295ac6a5f3ef3b443ceb4ec8c16c9ddb41077943"
 EXP_PCR11="A03EB49C9335D721758AE8AA9C34DA87664C5CAF9FAD7C314C68C038B16435DD"
-EXP_DECIDER_VERSION="0.1.0-draft-B.2.3-pre-validation"
-EXP_HELPER_VERSION="0.1.0-draft-B.2.2-pre-validation"
+EXP_DECIDER_VERSION="1.0.0"
+EXP_HELPER_VERSION="1.0.0"
 EXP_MID="0123456789abcdef0123456789abcdef"
 EXP_KVER_BOOTED="6.19.14-200.fc43.x86_64"
 EXP_KVER_SECONDARY="6.17.1-300.fc43.x86_64"
@@ -7533,7 +7559,7 @@ assert_lock_free() {
     fi
 }
 
-# Phase 1 — B.2.3 closure invariants (21 assertions)
+# Phase 1: B.2.3 closure invariants (21 assertions)
 [ "$(id -u)" -eq 0 ] || fail 101 "must run as root"; PASS=$((PASS+1))
 sha256sum "$DECIDER"  | awk '{print $1}' | grep -Exq "$EXP_DECIDER_SHA"  || fail 110 "decider sha drift";    PASS=$((PASS+1))
 sha256sum "$HELPER"   | awk '{print $1}' | grep -Exq "$EXP_HELPER_SHA"   || fail 111 "helper sha drift";     PASS=$((PASS+1))
@@ -7574,9 +7600,9 @@ PASS=$((PASS+1))
 [ "$(uname -r)" = "$EXP_KVER_BOOTED" ] || fail 180 "uname -r drift"; PASS=$((PASS+1))
 [ "$(cat /etc/machine-id)" = "$EXP_MID" ] || fail 181 "machine-id drift"; PASS=$((PASS+1))
 
-echo "=== Phase 1: B.2.3 closure invariants — ${PASS}/21 PASS ==="
+echo "=== Phase 1: B.2.3 closure invariants: ${PASS}/21 PASS ==="
 
-# Phase 2 — Candidate suitability by file ownership (6 assertions)
+# Phase 2: Candidate suitability by file ownership (6 assertions)
 rpm -q "$CANDIDATE" >/dev/null 2>&1 && fail 201 "$CANDIDATE already installed; fall back to dracut-live | dracut-squash | dracut-tools-extra" || true
 PASS=$((PASS+1))
 
@@ -7597,7 +7623,7 @@ PASS=$((PASS+1))
 grep -Eq '^/(boot|lib/modules)/' "$FILES_LIST" && fail 206 "$CANDIDATE owns /boot or /lib/modules" || true
 PASS=$((PASS+1))
 
-echo "--- Candidate $CANDIDATE — manifest-category intersection preview ---"
+echo "--- Candidate $CANDIDATE: manifest-category intersection preview ---"
 echo "cat 02-dracut-modules     hits: ${DRACUT_MOD_HITS}"
 echo "cat 01-dracut-config      hits: $(grep -Ec '^/etc/dracut\.conf|^/etc/dracut\.conf\.d/|^/usr/lib/dracut/dracut\.conf\.d/' "$FILES_LIST")"
 echo "cat 04-firmware           hits: $(grep -Ec '^/usr/lib/firmware/' "$FILES_LIST")"
@@ -7608,9 +7634,9 @@ echo "cat 08-cryptsetup-tooling hits: $(grep -Ec '^/usr/sbin/cryptsetup|^/usr/li
 echo "cat 09-tpm2-tss           hits: $(grep -Ec '^/usr/sbin/tpm2_|^/usr/lib64/libtss2-' "$FILES_LIST")"
 echo "cat 12-kernel-install     hits: $(grep -Ec '^/etc/kernel/install\.|^/usr/lib/kernel/install\.d/' "$FILES_LIST")"
 
-echo "=== Phase 2: candidate file-ownership suitability — ${PASS}/27 cumulative PASS ==="
+echo "=== Phase 2: candidate file-ownership suitability: ${PASS}/27 cumulative PASS ==="
 
-# Phase 3 — Transaction preview via dnf install --assumeno (7 assertions; see 06F K.2)
+# Phase 3: Transaction preview via dnf install --assumeno (7 assertions; see 06F K.2)
 ASSUMENO_OUT="$(new_tmp)"; ASSUMENO_RC=0
 PRE_ASSUMENO_TS="$(date -Iseconds)"
 sleep 1
@@ -7657,9 +7683,9 @@ if [ -s "$JOURNAL_OUT" ]; then
 fi
 PASS=$((PASS+1))
 
-echo "=== Phase 3: transaction preview via --assumeno — ${PASS}/34 cumulative PASS ==="
+echo "=== Phase 3: transaction preview via --assumeno: ${PASS}/34 cumulative PASS ==="
 
-# Phase 4A — Decider --dry-run with full before/after (12 assertions)
+# Phase 4A: Decider --dry-run with full before/after (12 assertions)
 DEC_VER="$("$DECIDER" --version 2>&1 | head -1)"
 echo "$DEC_VER" | grep -Fq "$EXP_DECIDER_VERSION" || fail 401 "decider --version unexpected"; PASS=$((PASS+1))
 
@@ -7687,7 +7713,7 @@ LAST_DECISION_MTIME_AFTER="$(stat -c '%Y' "$LAST_DECISION")"
 [ ! -e "$SENTINEL" ]   || fail 419 "sentinel created by --dry-run"; PASS=$((PASS+1))
 assert_lock_free "$DECIDER_LOCK" 420; PASS=$((PASS+1))
 
-# Phase 4B — Helper --self-test + --dry-run with full before/after (12 assertions)
+# Phase 4B: Helper --self-test + --dry-run with full before/after (12 assertions)
 HSD_BEFORE="$(hsd_digest)"
 PCR11_MTIME_BEFORE="$(stat -c '%Y' "$PCR11_FILE")"
 UKI_MTIME_BEFORE="$(stat -c '%Y' "$UKI_PATH")"
@@ -7732,18 +7758,18 @@ PASS=$((PASS+1))
 
 assert_lock_free "$HELPER_LOCK" 465; PASS=$((PASS+1))
 
-echo "=== Phase 4: live read-only probes — ${PASS}/58 cumulative PASS ==="
-echo "=== B.2.4 Gate 1 — ${PASS} assertions PASS ==="
+echo "=== Phase 4: live read-only probes: ${PASS}/58 cumulative PASS ==="
+echo "=== B.2.4 Gate 1: ${PASS} assertions PASS ==="
 EOF
 ```
 
 Expected output (reference run, 2026-05-25): 58/58 PASS. Manifest-category intersection preview shows `dracut-network` with 72 hits in cat 02-dracut-modules and 0 in every other category. `dnf install --assumeno dracut-network` returns rc=1 with `Operation aborted by the user.`, plan lists 1 package + 0 deps. Decider `--dry-run` reports `baseline compare result: unchanged` and `would EXIT 0`. Helper `--self-test` emits all 13 preflight ok lines. Helper `--dry-run` enumerates 2 kernels and logs the `[DRY-RUN] would run:` sequence with scratch under `/run/tboot-helper-XXXXXX`. All before/after byte-stability assertions hold.
 
-### Commands — Gate 2: pre-drift-transaction snapshot (snapshot gate; no validation harness)
+### Commands: Gate 2: pre-drift-transaction snapshot (snapshot gate; no validation harness)
 
 VM 500: no mutation (storage-level snapshot without `--vmstate`; VM continues running). Host pve-host: one new snapshot entry; LVM thin-pool data delta advances.
 
-Snapshot gates produce a single artefact (the snapshot itself) whose existence and lineage placement are the evidence. The questions a harness would answer — is the VM healthy, are the trust-chain shas frozen, is the state at expected closure values — are answered by the *adjacent* gates: Gate 1 immediately before, and Gate 3 immediately after. This matches how prior snapshot gates in this runbook are handled (B.2.3 Gate 7, B.2.1 Step 28 closing snapshot, Module 3 Step 26 pre-reboot snapshot). The evidence for Gate 2 is therefore (i) the snapshot command succeeds, (ii) the snapshot appears in `qm listsnapshot 500` parented correctly with `current` below, and (iii) VM 500 remains `status: running` per `qm status 500`.
+Snapshot gates produce a single artefact (the snapshot itself) whose existence and lineage placement are the evidence. The questions a harness would answer, is the VM healthy, are the trust-chain shas frozen, is the state at expected closure values, are answered by the *adjacent* gates: Gate 1 immediately before, and Gate 3 immediately after. This matches how prior snapshot gates in this runbook are handled (B.2.3 Gate 7, B.2.1 Step 28 closing snapshot, Module 3 Step 26 pre-reboot snapshot). The evidence for Gate 2 is therefore (i) the snapshot command succeeds, (ii) the snapshot appears in `qm listsnapshot 500` parented correctly with `current` below, and (iii) VM 500 remains `status: running` per `qm status 500`.
 
 If the host snapshot command fails, no new anchor was created; `module5-b2-3-validated` remains the rollback target. Do not proceed to Gate 3.
 
@@ -7753,11 +7779,11 @@ If the host snapshot command fails, no new anchor was created; `module5-b2-3-val
 # Identity check
 qm status 500
 
-# Lineage check — parent must already exist
+# Lineage check: parent must already exist
 qm listsnapshot 500
 
 # Create snapshot with descriptive metadata
-DESC="B.2.4 Gate 2 — pre-drift-transaction anchor. Frozen at B.2.3 closure values: decider sha 35ad8733...73cdd, helper sha 4bef2239...20f4b, predict sha 2d4985fa...aff160, hook sha a455444a...3b8c502f, prodrule sha dfbffe56...90d798, baseline sha 75dc4f56...0160, booted UKI sha b6002e66...7943, runtime PCR 11 A03EB49C...B16435DD. Gate 1 closed 58/58 PASS. Candidate for Gate 3: dracut-network (1 pkg, 0 deps, 72 files in /usr/lib/dracut/modules.d/). Parent: module5-b2-3-validated."
+DESC="B.2.4 Gate 2: pre-drift-transaction anchor. Frozen at B.2.3 closure values: decider sha 1e751109...e5cc05, helper sha 937afc7a...7125e44, predict sha b729ec27...91e3de, hook sha 5857e51d...20947e, prodrule sha dfbffe56...90d798, baseline sha 75dc4f56...0160, booted UKI sha b6002e66...7943, runtime PCR 11 A03EB49C...B16435DD. Gate 1 closed 58/58 PASS. Candidate for Gate 3: dracut-network (1 pkg, 0 deps, 72 files in /usr/lib/dracut/modules.d/). Parent: module5-b2-3-validated."
 
 qm snapshot 500 module5-b2-4-pre-drift-transaction --description "$DESC"
 
@@ -7768,13 +7794,13 @@ qm status 500
 
 Expected output (reference run, 2026-05-25). `qm status 500` reports `status: running` both before and after. `qm snapshot 500 module5-b2-4-pre-drift-transaction …` returns rc=0. `qm listsnapshot 500` post-creation lists `module5-b2-4-pre-drift-transaction` parented to `module5-b2-3-validated`, with `current` immediately below it. VM continues running uninterrupted. No PASS counter is reported because no assertion harness is run.
 
-### Commands — Gate 3: controlled live mutation `dnf install -y dracut-network`
+### Commands: Gate 3: controlled live mutation `dnf install -y dracut-network`
 
-One DNF transaction commits: install `dracut-network-107-8.fc43.x86_64`. Helper executes `dracut --force` and `kernel-install add` for both enumerated kernels; the 80-tpm2-sign hook re-signs both UKIs; predictor refreshes `/root/tboot-lab/state/expected-pcr11-after-hook-uki.txt`; baseline manifest is atomically replaced; sentinel is written then cleared; `last-decision` is rewritten with `decision=helper-success`. Helper scratch dir created under `/run/tboot-helper-XXXXXX` and removed by the helper's trap. Runtime PCR 11 unchanged (no reboot — correct). Trust-chain script/rule shas remain byte-stable.
+One DNF transaction commits: install `dracut-network-107-8.fc43.x86_64`. Helper executes `dracut --force` and `kernel-install add` for both enumerated kernels; the 80-tpm2-sign hook re-signs both UKIs; predictor refreshes `/root/tboot-lab/state/expected-pcr11-after-hook-uki.txt`; baseline manifest is atomically replaced; sentinel is written then cleared; `last-decision` is rewritten with `decision=helper-success`. Helper scratch dir created under `/run/tboot-helper-XXXXXX` and removed by the helper's trap. Runtime PCR 11 unchanged (no reboot: correct). Trust-chain script/rule shas remain byte-stable.
 
 Rollback anchor: `module5-b2-4-pre-drift-transaction`. On any Stop-Condition failure, `qm rollback 500 module5-b2-4-pre-drift-transaction` on host pve-host returns the VM to pre-Gate-3 state cleanly.
 
-**Reference-run outcome (2026-05-25).** The Gate 3 reference run used the rev-3 harness, which contained a regex bug in the helper-start assertion at position 411: the harness checked for `mode=normal` in the helper journal, but the helper logs its production code path as `mode=production` (the decider logs `mode=normal`; the two components use different terminology for the same end-to-end execution — see `06F` K.1). The harness halted at FAIL 411. The mutation itself completed correctly. The captured journal output from the reference run shows the full positive drift path: decider fired exactly once with `mode=normal`, drift detected, sentinel written `(reason=drift-detected)`, helper invoked, both kernels processed by `dracut` + `kernel-install add`, 80-tpm2-sign signed both UKIs (`ukify-native signed UKI ready (1 signature)` per kernel), helper exited 0, sentinel cleared, baseline atomically replaced, `last-decision=helper-success`, stored PCR 11 prediction advanced to `28E66CE2…C90F`.
+**Reference-run outcome (2026-05-25).** The Gate 3 reference run used the rev-3 harness, which contained a regex bug in the helper-start assertion at position 411: the harness checked for `mode=normal` in the helper journal, but the helper logs its production code path as `mode=production` (the decider logs `mode=normal`; the two components use different terminology for the same end-to-end execution: see `06F` K.1). The harness halted at FAIL 411. The mutation itself completed correctly. The captured journal output from the reference run shows the full positive drift path: decider fired exactly once with `mode=normal`, drift detected, sentinel written `(reason=drift-detected)`, helper invoked, both kernels processed by `dracut` + `kernel-install add`, 80-tpm2-sign signed both UKIs (`ukify-native signed UKI ready (1 signature)` per kernel), helper exited 0, sentinel cleared, baseline atomically replaced, `last-decision=helper-success`, stored PCR 11 prediction advanced to `28E66CE2…C90F`.
 
 Gate 3 was closed by running the post-hoc continuation verifier from `06F` K.1 against the now-mutated live state. The continuation verifier passed **43/43 assertions**, covering: package installed; decider evidence (journal non-empty, `mode=normal` start count = 1, drift reported, INVOKE logged, `helper exited 0`, sentinel cleared, no error-like lines); helper evidence (journal non-empty, `mode=production` start count = 1, both kernels enumerated, `dracut: ok` + `kernel-install add: ok` for each, predict OK, completion line present, no error-like lines); 80-tpm2-sign evidence (journal non-empty, exactly one `starting for kernel <kver>` per kernel, `ukify-native signed UKI ready` per kernel, no error-like lines); state transitions (`last-decision=helper-success`, baseline `75dc4f56…0160` → `6b032bd8…2a47`, last-manifest equals new baseline, sentinel absent, last-error absent, success marker fresh, failure marker/log absent); boot-artefact transitions (booted UKI sha `b6002e66…7943` → `0ac32c8b…6949`, both UKIs sbverify-OK, stored PCR 11 value `28E66CE2…C90F`, runtime PCR 11 unchanged at `A03EB49C…35DD`); trust-chain (decider/helper/predict/hook/production-rule shas byte-stable; exactly 1 active `*.actions`; locks not actively held).
 
@@ -7785,17 +7811,17 @@ bash <<'EOF'
 set -u
 
 # ============================================================================
-# B.2.4 Gate 3 — controlled live mutation: dnf install -y dracut-network
+# B.2.4 Gate 3: controlled live mutation: dnf install -y dracut-network
 # REPLAY FORM with K.1 fix applied (helper mode=production assertion).
 # Intended for use after qm rollback 500 module5-b2-4-pre-drift-transaction.
 # ============================================================================
 
-EXP_DECIDER_SHA="35ad8733f190483f1bd6d071d2aa7cb8b1549286f9040086182443c584473cdd"
+EXP_DECIDER_SHA="1e75110935a72fc9433c9b4bf5688d26bc6d3bd1e02f4388b5e1f32ff1e5cc05"
 EXP_BASELINE_SHA="75dc4f5651fc8996d39b545ac0bf7244a2a5888403b0ba0cd448a671daf80160"
 EXP_PRODRULE_SHA="dfbffe56fa95f4e0231569bb3a1aabc8952b9f99c9d290e4f8fb1005ef90d798"
-EXP_HOOK_SHA="a455444a54f5be265f822d85f4681cba8ed5365a4323c9008835022f3b8c502f"
-EXP_HELPER_SHA="4bef223925d3a2520e692403f0c0dd8a932770ec17136008a3d5f6f0b2620f4b"
-EXP_PREDICT_SHA="2d4985fa27726efff50bd91ba33ed1dd6e516fe2dd7350a48c73369b61aff160"
+EXP_HOOK_SHA="5857e51d5551e05a7ca384f71529ec2fef07f5a6dbe40df70c6bbe49d720947e"
+EXP_HELPER_SHA="937afc7a0d199bf7b7d1a5f5bcccf45c37c0f4f7dd0ad924b2567c4da7125e44"
+EXP_PREDICT_SHA="b729ec271dd76cd8b4581f16c86e50fc28b947f2a1de5a7e16c6d5828591e3de"
 
 PRE_UKI_SHA="b6002e666afdf71e5a083311295ac6a5f3ef3b443ceb4ec8c16c9ddb41077943"
 PRE_PCR11="A03EB49C9335D721758AE8AA9C34DA87664C5CAF9FAD7C314C68C038B16435DD"
@@ -7904,7 +7930,7 @@ PRE_INITRAMFS_MTIME="$(stat -c '%Y' "$INITRAMFS_PATH")"
 PRE_PCR11_MTIME="$(stat -c '%Y' "$PCR11_FILE")"
 PRE_HELPER_DIGEST="$(hsd_digest)"
 
-echo "=== Phase 1: pre-mutation — ${PASS}/17 PASS ==="
+echo "=== Phase 1: pre-mutation: ${PASS}/17 PASS ==="
 
 # --- Phase 2: mutation (1 assertion) ---
 PRE_TS="$(date -Iseconds)"; PRE_EPOCH="$(date +%s)"
@@ -7915,7 +7941,7 @@ POST_EPOCH="$(date +%s)"; POST_TS="$(date -Iseconds)"
 echo "--- dnf output (rc=$DNF_RC, duration $((POST_EPOCH-PRE_EPOCH))s) ---"
 cat "$DNF_OUT"
 [ "$DNF_RC" -eq 0 ] || fail 200 "dnf install rc=$DNF_RC"; PASS=$((PASS+1))
-echo "=== Phase 2: DNF — ${PASS}/18 cumulative PASS ==="
+echo "=== Phase 2: DNF: ${PASS}/18 cumulative PASS ==="
 
 # --- Phase 3: candidate installed (1 assertion) ---
 rpm -q "$CANDIDATE" >/dev/null 2>&1 || fail 301 "$CANDIDATE not installed after rc=0"
@@ -7939,7 +7965,7 @@ if journal_has_error "$DEC_JOURNAL"; then show_error_lines "$DEC_JOURNAL"; fail 
 
 [ -s "$HELP_JOURNAL" ] || fail 410 "helper journal empty"; PASS=$((PASS+1))
 
-# 06F K.1 fix — helper logs production code path as mode=production, NOT mode=normal.
+# 06F K.1 fix: helper logs production code path as mode=production, NOT mode=normal.
 HELP_START_COUNT="$(grep -Ec '(^|[[:space:]])starting version=.*mode=production' "$HELP_JOURNAL" || true)"
 [ "$HELP_START_COUNT" -eq 1 ] || fail 411 "helper production-mode start lines = $HELP_START_COUNT"
 PASS=$((PASS+1))
@@ -7956,7 +7982,7 @@ HOOK_SECONDARY_COUNT="$(grep -Fc "starting for kernel ${EXP_KVER_SECONDARY}" "$H
 [ "$HOOK_SECONDARY_COUNT" -eq 1 ] || fail 422 "hook secondary count = $HOOK_SECONDARY_COUNT"; PASS=$((PASS+1))
 if journal_has_error "$HOOK_JOURNAL"; then show_error_lines "$HOOK_JOURNAL"; fail 423 "hook has errors"; fi; PASS=$((PASS+1))
 
-echo "=== Phase 4: journals — ${PASS}/36 cumulative PASS ==="
+echo "=== Phase 4: journals: ${PASS}/36 cumulative PASS ==="
 
 # --- Phase 5: state transitions (10 assertions) ---
 POST_LD_SHA="$(sha256sum "$LAST_DECISION" | awk '{print $1}')"
@@ -7980,7 +8006,7 @@ SM_MTIME="$(stat -c '%Y' "$SUCCESS_MARKER")"
 [ "$SM_MTIME" -ge "$PRE_EPOCH" ] || fail 511 "success marker predates PRE_EPOCH"; PASS=$((PASS+1))
 { [ ! -e "$FAILURE_MARKER" ] && [ ! -e "$FAILURE_LOG" ]; } || fail 512 "failure marker/log present"; PASS=$((PASS+1))
 
-echo "=== Phase 5: state transitions — ${PASS}/46 cumulative PASS ==="
+echo "=== Phase 5: state transitions: ${PASS}/46 cumulative PASS ==="
 
 # --- Phase 6: UKI / initramfs / PCR 11 (7 assertions; PCR value info-only) ---
 POST_UKI_SHA="$(sha256sum "$UKI_PATH" | awk '{print $1}')"
@@ -8001,7 +8027,7 @@ RT_PCR11="$(awk '{gsub(/^0x/,""); print toupper($0)}' /sys/class/tpm/tpm0/pcr-sh
 [ "$RT_PCR11" = "$PRE_PCR11" ] || fail 608 "runtime PCR 11 changed without reboot"; PASS=$((PASS+1))
 POST_PCR11_VALUE="$(tr -d '[:space:]' <"$PCR11_FILE" | awk '{print toupper($0)}')"
 echo "PCR 11 value PRE/POST: $PRE_PCR11_VALUE / $POST_PCR11_VALUE   (informational per 06F K.3)"
-echo "=== Phase 6: UKI/initramfs/PCR 11 — ${PASS}/53 cumulative PASS ==="
+echo "=== Phase 6: UKI/initramfs/PCR 11: ${PASS}/53 cumulative PASS ==="
 
 # --- Phase 7: trust-chain + locks (8 assertions) ---
 sha256sum "$DECIDER"  | awk '{print $1}' | grep -Exq "$EXP_DECIDER_SHA"  || fail 701 "decider sha drifted"; PASS=$((PASS+1))
@@ -8014,10 +8040,10 @@ mapfile -t ACTIONS_POST < <(find "$ACTIONS_DIR" -maxdepth 1 -type f -name '*.act
 PASS=$((PASS+1))
 assert_lock_free "$DECIDER_LOCK" 720; PASS=$((PASS+1))
 assert_lock_free "$HELPER_LOCK"  721; PASS=$((PASS+1))
-echo "=== Phase 7: trust-chain + locks — ${PASS}/61 cumulative PASS ==="
+echo "=== Phase 7: trust-chain + locks: ${PASS}/61 cumulative PASS ==="
 
 POST_HELPER_DIGEST="$(hsd_digest)"
-echo "=== B.2.4 Gate 3 (replay form) — ${PASS} assertions PASS ==="
+echo "=== B.2.4 Gate 3 (replay form): ${PASS} assertions PASS ==="
 echo "Gate 3 complete; stop for review. Do not reboot yet."
 EOF
 ```
@@ -8036,7 +8062,7 @@ VM 500 is left in the Gate 3 post-mutation state. `dracut-network` remains insta
 
 ---
 
-## Step 35: Block B.2.4 Gates 4–5 — pre-reboot read-only cross-validation + pre-reboot snapshot
+## Step 35: Block B.2.4 Gates 4–5: pre-reboot read-only cross-validation + pre-reboot snapshot
 
 **Goal:** prove on-disk consistency of the rebuilt UKI without mutating any monitored state, then take the pre-reboot snapshot. Gate 4 must independently reproduce the stored PCR 11 prediction from the on-disk rebuilt UKI byte-for-byte. Gate 5 is snapshot-only, no validation harness.
 **Prerequisites:** Step 34 (B.2.4 Gates 1–3) closed; VM in the post-Gate-3 mutation state with `dracut-network-107-8.fc43.x86_64` installed, baseline sha `6b032bd8…2a47`, stored PCR 11 prediction `28E66CE2…C90F`, runtime PCR 11 still pre-reboot `A03EB49C…35DD`, current UKI sha `0ac32c8b…6949`.
@@ -8044,7 +8070,7 @@ VM 500 is left in the Gate 3 post-mutation state. `dracut-network` remains insta
 
 ### Commands
 
-**Gate 4 — pre-reboot read-only cross-validation harness (36/36 PASS target).** Read-only with respect to all monitored state: trust-chain artifacts, decider state-dir, helper state-dir, ESP UKIs, `/etc/dnf/libdnf5-plugins/actions.d/`, `/root/tboot-lab/state/expected-pcr11-after-hook-uki.txt`, runtime PCR 11. The `tboot-predict-pcr11` invocation scratches to `/run` tmpfs and shreds on exit (no `--store` flag → predictor's `STORE=0` default; STATE_FILE never opened for write). `assert_lock_free` opens fd 9 briefly and never unlinks. No DNF, no kernel-install, no dracut, no `bootctl set-default`, no `systemd-cryptenroll`, no `ukify`, no `objcopy --add-section`, no reboot, no `qm snapshot`.
+**Gate 4: pre-reboot read-only cross-validation harness (36/36 PASS target).** Read-only with respect to all monitored state: trust-chain artifacts, decider state-dir, helper state-dir, ESP UKIs, `/etc/dnf/libdnf5-plugins/actions.d/`, `/root/tboot-lab/state/expected-pcr11-after-hook-uki.txt`, runtime PCR 11. The `tboot-predict-pcr11` invocation scratches to `/run` tmpfs and shreds on exit (no `--store` flag → predictor's `STORE=0` default; STATE_FILE never opened for write). `assert_lock_free` opens fd 9 briefly and never unlinks. No DNF, no kernel-install, no dracut, no `bootctl set-default`, no `systemd-cryptenroll`, no `ukify`, no `objcopy --add-section`, no reboot, no `qm snapshot`.
 
 ```bash
 # Run on VM 500 as root (tmux)
@@ -8052,16 +8078,16 @@ bash <<'EOF'
 set -u
 
 # ============================================================================
-# B.2.4 Gate 4 — pre-reboot read-only cross-validation
+# B.2.4 Gate 4: pre-reboot read-only cross-validation
 # Proves that the rebuilt on-disk UKI is internally consistent and that the
 # stored PCR 11 prediction is reproducible from it, without mutating any
 # monitored state.
 # ============================================================================
 
-EXP_DECIDER_SHA="35ad8733f190483f1bd6d071d2aa7cb8b1549286f9040086182443c584473cdd"
-EXP_HELPER_SHA="4bef223925d3a2520e692403f0c0dd8a932770ec17136008a3d5f6f0b2620f4b"
-EXP_PREDICT_SHA="2d4985fa27726efff50bd91ba33ed1dd6e516fe2dd7350a48c73369b61aff160"
-EXP_HOOK_SHA="a455444a54f5be265f822d85f4681cba8ed5365a4323c9008835022f3b8c502f"
+EXP_DECIDER_SHA="1e75110935a72fc9433c9b4bf5688d26bc6d3bd1e02f4388b5e1f32ff1e5cc05"
+EXP_HELPER_SHA="937afc7a0d199bf7b7d1a5f5bcccf45c37c0f4f7dd0ad924b2567c4da7125e44"
+EXP_PREDICT_SHA="b729ec271dd76cd8b4581f16c86e50fc28b947f2a1de5a7e16c6d5828591e3de"
+EXP_HOOK_SHA="5857e51d5551e05a7ca384f71529ec2fef07f5a6dbe40df70c6bbe49d720947e"
 EXP_PRODRULE_SHA="dfbffe56fa95f4e0231569bb3a1aabc8952b9f99c9d290e4f8fb1005ef90d798"
 
 EXP_BASELINE_SHA="6b032bd81a7f3a57b8350c76cf690deb3a942704a76455b881f7a5d98df82a47"
@@ -8111,7 +8137,7 @@ trap _cleanup EXIT HUP INT TERM
 PASS=0
 fail() { echo "FAIL $1: $2"; exit "$1"; }
 
-# 06F J.3 lock probe — non-blocking flock on fd 9.
+# 06F J.3 lock probe: non-blocking flock on fd 9.
 assert_lock_free() {
     local lock="$1" code="$2"
     if [ -e "$lock" ] || [ -L "$lock" ]; then
@@ -8150,53 +8176,53 @@ uki_vma_sane() {
 # Phase 1 (1)
 [ "$(id -u)" -eq 0 ] || fail 101 "must run as root"; PASS=$((PASS+1))
 
-# Phase 2 (5) — trust-chain byte-stability
+# Phase 2 (5): trust-chain byte-stability
 sha256sum "$DECIDER"  | awk '{print $1}' | grep -Exq "$EXP_DECIDER_SHA"  || fail 110 "decider sha drift";          PASS=$((PASS+1))
 sha256sum "$HELPER"   | awk '{print $1}' | grep -Exq "$EXP_HELPER_SHA"   || fail 111 "helper sha drift";           PASS=$((PASS+1))
 sha256sum "$PREDICT"  | awk '{print $1}' | grep -Exq "$EXP_PREDICT_SHA"  || fail 112 "predict sha drift";          PASS=$((PASS+1))
 sha256sum "$HOOK"     | awk '{print $1}' | grep -Exq "$EXP_HOOK_SHA"     || fail 113 "hook sha drift";             PASS=$((PASS+1))
 sha256sum "$PRODRULE" | awk '{print $1}' | grep -Exq "$EXP_PRODRULE_SHA" || fail 114 "production rule sha drift";  PASS=$((PASS+1))
 
-# Phase 3 (1) — exactly one active *.actions == PRODRULE
+# Phase 3 (1): exactly one active *.actions == PRODRULE
 mapfile -t ACTIONS_ACTIVE < <(find "$ACTIONS_DIR" -maxdepth 1 -type f -name '*.actions' -printf '%p\n' | sort)
 { [ "${#ACTIONS_ACTIVE[@]}" -eq 1 ] && [ "${ACTIONS_ACTIVE[0]}" = "$PRODRULE" ]; } \
     || fail 120 "unexpected *.actions entries (count=${#ACTIONS_ACTIVE[@]}; first='${ACTIONS_ACTIVE[0]:-}')"
 PASS=$((PASS+1))
 
-# Phase 4 (4) — decider state invariants
+# Phase 4 (4): decider state invariants
 sha256sum "$BASELINE"      | awk '{print $1}' | grep -Exq "$EXP_BASELINE_SHA" || fail 130 "baseline sha != post-Gate-3 expected"; PASS=$((PASS+1))
 sha256sum "$LAST_MANIFEST" | awk '{print $1}' | grep -Exq "$EXP_BASELINE_SHA" || fail 131 "last-manifest sha != current baseline"; PASS=$((PASS+1))
 LD_DECISION="$(awk -F= '$1=="decision"{print $2}' "$LAST_DECISION")"
 [ "$LD_DECISION" = "helper-success" ] || fail 132 "last-decision.decision='$LD_DECISION' (expected helper-success)"; PASS=$((PASS+1))
 [ ! -e "$LAST_ERROR" ] || fail 133 "decider last-error present"; PASS=$((PASS+1))
 
-# Phase 5 (3) — helper state invariants
+# Phase 5 (3): helper state invariants
 [ ! -e "$SENTINEL" ]       || fail 140 "UNSAFE-TO-REBOOT sentinel present"; PASS=$((PASS+1))
 [ ! -e "$FAILURE_MARKER" ] || fail 141 "helper failure marker present";     PASS=$((PASS+1))
 [ ! -e "$FAILURE_LOG" ]    || fail 142 "helper failure log present";        PASS=$((PASS+1))
 
-# Phase 6 (1) — candidate still installed
+# Phase 6 (1): candidate still installed
 rpm -q "$CANDIDATE" >/dev/null 2>&1 || fail 150 "$CANDIDATE no longer installed"
 INSTALLED_NEVRA="$(rpm -q "$CANDIDATE")"
 PASS=$((PASS+1))
 
-# Phase 7 (2) — locks not actively held (06F J.3)
+# Phase 7 (2): locks not actively held (06F J.3)
 assert_lock_free "$DECIDER_LOCK" 160; PASS=$((PASS+1))
 assert_lock_free "$HELPER_LOCK"  161; PASS=$((PASS+1))
 
-# Phase 8 (3) — current UKI identity
+# Phase 8 (3): current UKI identity
 { [ -f "$UKI_PATH" ] && [ ! -L "$UKI_PATH" ]; } || fail 200 "current UKI not regular non-symlink: $UKI_PATH"; PASS=$((PASS+1))
 sha256sum "$UKI_PATH" | awk '{print $1}' | grep -Exq "$EXP_UKI_SHA" \
     || fail 201 "current UKI sha != post-Gate-3 expected ($EXP_UKI_SHA)"; PASS=$((PASS+1))
 sbverify --cert "$DB_CRT" "$UKI_PATH" >/dev/null 2>&1 \
     || fail 202 "current UKI sbverify failed against $DB_CRT"; PASS=$((PASS+1))
 
-# Phase 9 (2) — current UKI structural sanity
+# Phase 9 (2): current UKI structural sanity
 uki_has_pcr_sections "$UKI_PATH" || fail 210 "current UKI missing .pcrpkey or .pcrsig"; PASS=$((PASS+1))
 uki_vma_sane "$UKI_PATH" "$VMA_THRESHOLD" \
     || fail 211 "current UKI section(s) at VMA >= $VMA_THRESHOLD (06F B.1 layout-corruption signal)"; PASS=$((PASS+1))
 
-# Phase 10 (4) — secondary UKI structural sanity (no sha pin per Gate 4 spec)
+# Phase 10 (4): secondary UKI structural sanity (no sha pin per Gate 4 spec)
 { [ -f "$UKI_PATH_SECONDARY" ] && [ ! -L "$UKI_PATH_SECONDARY" ]; } \
     || fail 220 "secondary UKI not regular non-symlink: $UKI_PATH_SECONDARY"; PASS=$((PASS+1))
 sbverify --cert "$DB_CRT" "$UKI_PATH_SECONDARY" >/dev/null 2>&1 \
@@ -8206,7 +8232,7 @@ uki_has_pcr_sections "$UKI_PATH_SECONDARY" \
 uki_vma_sane "$UKI_PATH_SECONDARY" "$VMA_THRESHOLD" \
     || fail 223 "secondary UKI section(s) at VMA >= $VMA_THRESHOLD"; PASS=$((PASS+1))
 
-# Phase 11 (2) — bootctl Default + Current Entry (06F I.2 parse bootctl status)
+# Phase 11 (2): bootctl Default + Current Entry (06F I.2 parse bootctl status)
 BOOTCTL_OUT="$(new_tmp)"
 bootctl status >"$BOOTCTL_OUT" 2>/dev/null || fail 300 "bootctl status returned non-zero"
 DEFAULT_ENTRY="$(awk -F': ' '/^[[:space:]]*Default Entry:/ {print $2; exit}' "$BOOTCTL_OUT" | xargs)"
@@ -8216,7 +8242,7 @@ CURRENT_ENTRY="$(awk -F': ' '/^[[:space:]]*Current Entry:/ {print $2; exit}' "$B
 [ "$CURRENT_ENTRY" = "$EXP_DEFAULT_ENTRY" ] \
     || fail 302 "Current Entry='$CURRENT_ENTRY' (expected '$EXP_DEFAULT_ENTRY')"; PASS=$((PASS+1))
 
-# Phase 12 (5) — PCR 11 cross-validation
+# Phase 12 (5): PCR 11 cross-validation
 STORED_PCR11="$(tr -d '[:space:]' <"$PCR11_FILE" | awk '{print toupper($0)}')"
 [ "$STORED_PCR11" = "$EXP_STORED_PCR11" ] \
     || fail 400 "stored PCR 11='$STORED_PCR11' (expected '$EXP_STORED_PCR11')"; PASS=$((PASS+1))
@@ -8253,7 +8279,7 @@ RT_PCR11="$(awk '{gsub(/^0x/,""); print toupper($0)}' /sys/class/tpm/tpm0/pcr-sh
 [ "$RT_PCR11" = "$EXP_RUNTIME_PCR11" ] \
     || fail 404 "runtime PCR 11='$RT_PCR11' (expected pre-reboot '$EXP_RUNTIME_PCR11')"; PASS=$((PASS+1))
 
-# Phase 13 (3) — journal cleanliness since Gate 3 close (-o cat broad pattern)
+# Phase 13 (3): journal cleanliness since Gate 3 close (-o cat broad pattern)
 LD_MTIME="$(stat -c %Y "$LAST_DECISION")"
 SCAN_SINCE="@${LD_MTIME}"
 DEC_JOURNAL="$(new_tmp)"; HELP_JOURNAL="$(new_tmp)"; HOOK_JOURNAL="$(new_tmp)"
@@ -8265,11 +8291,11 @@ if journal_has_error "$DEC_JOURNAL";  then show_error_lines "$DEC_JOURNAL";  fai
 if journal_has_error "$HELP_JOURNAL"; then show_error_lines "$HELP_JOURNAL"; fail 501 "helper journal has error-like lines since Gate 3 close";  fi; PASS=$((PASS+1))
 if journal_has_error "$HOOK_JOURNAL"; then show_error_lines "$HOOK_JOURNAL"; fail 502 "80-tpm2-sign journal has error-like lines since Gate 3 close"; fi; PASS=$((PASS+1))
 
-echo "=== B.2.4 Gate 4 — ${PASS}/36 PASS ==="
+echo "=== B.2.4 Gate 4: ${PASS}/36 PASS ==="
 EOF
 ```
 
-**Gate 5 — pre-reboot snapshot.** Snapshot-only gate, no harness; convention identical to B.2.4 Gate 2 and B.2.3 Gate 7.
+**Gate 5: pre-reboot snapshot.** Snapshot-only gate, no harness; convention identical to B.2.4 Gate 2 and B.2.3 Gate 7.
 
 ```bash
 # Run on Proxmox host pve-host as root
@@ -8282,23 +8308,23 @@ qm status 500
 
 ### Expected output
 
-- Gate 4: `=== B.2.4 Gate 4 — 36/36 PASS ===`. Independent prediction equals stored prediction byte-for-byte. Runtime PCR 11 still pre-reboot value.
+- Gate 4: `=== B.2.4 Gate 4: 36/36 PASS ===`. Independent prediction equals stored prediction byte-for-byte. Runtime PCR 11 still pre-reboot value.
 - Gate 5: `qm snapshot` exits 0. `qm listsnapshot 500` shows `module5-b2-4-pre-reboot` with `current` directly below; parented to `module5-b2-4-pre-drift-transaction`. `qm status 500` returns `running`.
 
 ### Stop condition
 
-- Gate 4 FAIL 200–202 / 210–211 / 220–223: current or secondary UKI integrity broken — do not snapshot, do not reboot, capture forensics, rollback to `module5-b2-4-pre-drift-transaction`.
-- Gate 4 FAIL 400–404: PCR 11 cross-validation broken (stored ≠ independent, or runtime changed without reboot, or predictor errored). Severe — investigate before any reboot.
-- Gate 4 FAIL 130–142 / 110–114 / 120: trust-chain or state drift between Step 34 closure and Gate 4 — investigate; do not proceed.
+- Gate 4 FAIL 200–202 / 210–211 / 220–223: current or secondary UKI integrity broken: do not snapshot, do not reboot, capture forensics, rollback to `module5-b2-4-pre-drift-transaction`.
+- Gate 4 FAIL 400–404: PCR 11 cross-validation broken (stored ≠ independent, or runtime changed without reboot, or predictor errored). Severe: investigate before any reboot.
+- Gate 4 FAIL 130–142 / 110–114 / 120: trust-chain or state drift between Step 34 closure and Gate 4: investigate; do not proceed.
 - Gate 5 fails if `qm snapshot` returns non-zero or post-creation `qm listsnapshot 500` does not show `module5-b2-4-pre-reboot` parented correctly. Do not declare Gate 5 closed even if `qm snapshot` reported success without lineage verification.
 
 ### Snapshot point
 
-`module5-b2-4-pre-reboot` — pre-reboot cliff-edge anchor; rollback target for any Gate 6 reboot failure (passphrase prompt, firmware Secure-Boot rejection, kernel panic). Parent: `module5-b2-4-pre-drift-transaction`.
+`module5-b2-4-pre-reboot`: pre-reboot cliff-edge anchor; rollback target for any Gate 6 reboot failure (passphrase prompt, firmware Secure-Boot rejection, kernel panic). Parent: `module5-b2-4-pre-drift-transaction`.
 
 ---
 
-## Step 36: Block B.2.4 Gates 6A–6B — reboot validation (operator-attested clean boot + post-reboot read-only harness)
+## Step 36: Block B.2.4 Gates 6A–6B: reboot validation (operator-attested clean boot + post-reboot read-only harness)
 
 **Goal:** prove the trusted-boot chain end-to-end across an actual reboot transition: firmware loads the rebuilt UKI; systemd-cryptsetup performs TPM2 unlock of LUKS keyslot 1 without an operator passphrase prompt; userspace comes up clean; runtime PCR 11 byte-matches the new stored prediction `28E66CE2…C90F`. Gate 6A is operator-attested (manual Proxmox console observation is mandatory and cannot be inferred from journal evidence). Gate 6B is the read-only post-reboot validation harness.
 **Prerequisites:** Step 35 (Gates 4–5) closed; snapshot `module5-b2-4-pre-reboot` taken with `current` directly below; VM running.
@@ -8306,17 +8332,17 @@ qm status 500
 
 ### Commands
 
-**Gate 6A Step 1 — pre-reboot cliff-edge probe (17/17 PASS target).** Confirms nothing has drifted between Gate 4 / Gate 5 close and the imminent reboot. If any assertion fails, halt — do NOT reboot.
+**Gate 6A Step 1: pre-reboot cliff-edge probe (17/17 PASS target).** Confirms nothing has drifted between Gate 4 / Gate 5 close and the imminent reboot. If any assertion fails, halt: do NOT reboot.
 
 ```bash
 # Run on VM 500 as root (tmux)
 bash <<'EOF'
 set -u
 
-EXP_DECIDER_SHA="35ad8733f190483f1bd6d071d2aa7cb8b1549286f9040086182443c584473cdd"
-EXP_HELPER_SHA="4bef223925d3a2520e692403f0c0dd8a932770ec17136008a3d5f6f0b2620f4b"
-EXP_PREDICT_SHA="2d4985fa27726efff50bd91ba33ed1dd6e516fe2dd7350a48c73369b61aff160"
-EXP_HOOK_SHA="a455444a54f5be265f822d85f4681cba8ed5365a4323c9008835022f3b8c502f"
+EXP_DECIDER_SHA="1e75110935a72fc9433c9b4bf5688d26bc6d3bd1e02f4388b5e1f32ff1e5cc05"
+EXP_HELPER_SHA="937afc7a0d199bf7b7d1a5f5bcccf45c37c0f4f7dd0ad924b2567c4da7125e44"
+EXP_PREDICT_SHA="b729ec271dd76cd8b4581f16c86e50fc28b947f2a1de5a7e16c6d5828591e3de"
+EXP_HOOK_SHA="5857e51d5551e05a7ca384f71529ec2fef07f5a6dbe40df70c6bbe49d720947e"
 EXP_PRODRULE_SHA="dfbffe56fa95f4e0231569bb3a1aabc8952b9f99c9d290e4f8fb1005ef90d798"
 EXP_BASELINE_SHA="6b032bd81a7f3a57b8350c76cf690deb3a942704a76455b881f7a5d98df82a47"
 EXP_UKI_SHA="0ac32c8b98428f9a44339a5991eb86e2704986e84ce6e09ae9721bba41726949"
@@ -8342,7 +8368,7 @@ HELPER_LOCK="/run/tboot-dnf-helper.lock"
 CANDIDATE="dracut-network"
 
 PASS=0
-fail() { echo "FAIL $1: $2 — DO NOT REBOOT"; exit "$1"; }
+fail() { echo "FAIL $1: $2: DO NOT REBOOT"; exit "$1"; }
 
 assert_lock_free() {
     local lock="$1" code="$2"
@@ -8392,14 +8418,14 @@ sha256sum "$PREDICT"  | awk '{print $1}' | grep -Exq "$EXP_PREDICT_SHA"  || fail
 sha256sum "$HOOK"     | awk '{print $1}' | grep -Exq "$EXP_HOOK_SHA"     || fail 116 "hook sha drift";             PASS=$((PASS+1))
 sha256sum "$PRODRULE" | awk '{print $1}' | grep -Exq "$EXP_PRODRULE_SHA" || fail 117 "production rule sha drift";  PASS=$((PASS+1))
 
-echo "=== B.2.4 Gate 6A pre-reboot probe — ${PASS}/17 PASS ==="
-echo "Cliff-edge OK. Probe complete. STOP — open Proxmox console BEFORE reboot."
+echo "=== B.2.4 Gate 6A pre-reboot probe: ${PASS}/17 PASS ==="
+echo "Cliff-edge OK. Probe complete. STOP: open Proxmox console BEFORE reboot."
 EOF
 ```
 
-**Gate 6A Step 2 — open Proxmox console BEFORE issuing reboot.** Web UI: navigate to VM 500 (`tboot-lab`) → **Console** on host `pve-host`. noVNC viewer must be rendered and actively watched before Step 3.
+**Gate 6A Step 2: open Proxmox console BEFORE issuing reboot.** Web UI: navigate to VM 500 (`tboot-lab`) → **Console** on host `pve-host`. noVNC viewer must be rendered and actively watched before Step 3.
 
-**Gate 6A Step 3 — issue the reboot.** From inside VM 500, same tmux session:
+**Gate 6A Step 3: issue the reboot.** From inside VM 500, same tmux session:
 
 ```bash
 # Run on VM 500 as root, AFTER the Proxmox console is open and being watched
@@ -8408,7 +8434,7 @@ systemctl reboot
 
 SSH drops. tmux state inside the VM terminates with the reboot.
 
-**Gate 6A Step 4 — manual Proxmox console observation (mandatory).** Watch:
+**Gate 6A Step 4: manual Proxmox console observation (mandatory).** Watch:
 
 | Boot phase | Pass | Hard fail |
 |---|---|---|
@@ -8416,9 +8442,9 @@ SSH drops. tmux state inside the VM terminates with the reboot.
 | systemd-boot menu | Default = MID-prefixed 6.19.14 UKI; auto-selects on timeout | Different entry selected (forensic UKI hijack) → triage |
 | Kernel boot | Standard kernel messages | Kernel panic → capture screenshot, roll back |
 | systemd-cryptsetup phase | **No passphrase prompt.** Brief pause (< 2 s typical) then proceed | **LUKS passphrase prompt appearing = Gate 6 hard fail. Do NOT type the passphrase as part of the validation path.** See Recovery procedures. |
-| Login prompt | `tboot login:` appears | System hung — capture screenshot, triage |
+| Login prompt | `tboot login:` appears | System hung: capture screenshot, triage |
 
-**Gate 6A Step 5 — SSH reconnect liveness (read-only).**
+**Gate 6A Step 5: SSH reconnect liveness (read-only).**
 
 ```bash
 # Run on VM 500 as root (new SSH session, new tmux)
@@ -8430,17 +8456,17 @@ uptime -p                                           # expected: small (< 2 min)
 
 **Gate 6A closure deliverables:** pre-reboot probe output (17/17 PASS) + operator console-observation log + Step 5 liveness output + explicit operator attestation "no passphrase prompt observed".
 
-**Gate 6B — post-reboot read-only validation harness (28/28 PASS target).** Strict allowlist: `bootctl status`, `cat /sys/class/tpm/tpm0/pcr-sha256/11`, `cat /root/tboot-lab/state/expected-pcr11-after-hook-uki.txt`, `sha256sum`, `sbverify`, `objdump -h`, `rpm -q dracut-network`, `journalctl`. Strict banlist: no `dnf`, no `dracut`, no `kernel-install`, no `ukify`, no `bootctl set-*`, no `systemd-cryptenroll`, no `cryptsetup`, no `efi-updatevar`, no cleanup, no snapshot.
+**Gate 6B: post-reboot read-only validation harness (28/28 PASS target).** Strict allowlist: `bootctl status`, `cat /sys/class/tpm/tpm0/pcr-sha256/11`, `cat /root/tboot-lab/state/expected-pcr11-after-hook-uki.txt`, `sha256sum`, `sbverify`, `objdump -h`, `rpm -q dracut-network`, `journalctl`. Strict banlist: no `dnf`, no `dracut`, no `kernel-install`, no `ukify`, no `bootctl set-*`, no `systemd-cryptenroll`, no `cryptsetup`, no `efi-updatevar`, no cleanup, no snapshot.
 
 ```bash
 # Run on VM 500 as root (post-reboot SSH/tmux session)
 bash <<'EOF'
 set -u
 
-EXP_DECIDER_SHA="35ad8733f190483f1bd6d071d2aa7cb8b1549286f9040086182443c584473cdd"
-EXP_HELPER_SHA="4bef223925d3a2520e692403f0c0dd8a932770ec17136008a3d5f6f0b2620f4b"
-EXP_PREDICT_SHA="2d4985fa27726efff50bd91ba33ed1dd6e516fe2dd7350a48c73369b61aff160"
-EXP_HOOK_SHA="a455444a54f5be265f822d85f4681cba8ed5365a4323c9008835022f3b8c502f"
+EXP_DECIDER_SHA="1e75110935a72fc9433c9b4bf5688d26bc6d3bd1e02f4388b5e1f32ff1e5cc05"
+EXP_HELPER_SHA="937afc7a0d199bf7b7d1a5f5bcccf45c37c0f4f7dd0ad924b2567c4da7125e44"
+EXP_PREDICT_SHA="b729ec271dd76cd8b4581f16c86e50fc28b947f2a1de5a7e16c6d5828591e3de"
+EXP_HOOK_SHA="5857e51d5551e05a7ca384f71529ec2fef07f5a6dbe40df70c6bbe49d720947e"
 EXP_PRODRULE_SHA="dfbffe56fa95f4e0231569bb3a1aabc8952b9f99c9d290e4f8fb1005ef90d798"
 EXP_BASELINE_SHA="6b032bd81a7f3a57b8350c76cf690deb3a942704a76455b881f7a5d98df82a47"
 EXP_UKI_SHA="0ac32c8b98428f9a44339a5991eb86e2704986e84ce6e09ae9721bba41726949"
@@ -8505,14 +8531,14 @@ uki_vma_sane() {
 # Phase 1 (1)
 [ "$(id -u)" -eq 0 ] || fail 101 "must run as root"; PASS=$((PASS+1))
 
-# Phase 2 (3) — CORE PCR 11 pass condition: heart of Gate 6B
+# Phase 2 (3): CORE PCR 11 pass condition: heart of Gate 6B
 STORED_PCR11="$(tr -d '[:space:]' <"$PCR11_FILE" | awk '{print toupper($0)}')"
 [ "$STORED_PCR11" = "$EXP_STORED_PCR11" ] || fail 200 "stored PCR 11='$STORED_PCR11' (expected '$EXP_STORED_PCR11')"; PASS=$((PASS+1))
 RT_PCR11="$(awk '{gsub(/^0x/,""); print toupper($0)}' "$TPM_PCR11_SYSFS")"
 [ "$RT_PCR11" = "$EXP_STORED_PCR11" ] || fail 201 "runtime PCR 11='$RT_PCR11' (expected new prediction '$EXP_STORED_PCR11'); chain did not advance"; PASS=$((PASS+1))
 [ "$RT_PCR11" != "$EXP_OLD_PCR11" ] || fail 202 "runtime PCR 11 still pre-Gate-3 value '$EXP_OLD_PCR11'"; PASS=$((PASS+1))
 
-# Phase 3 (3) — bootctl-attested boot path
+# Phase 3 (3): bootctl-attested boot path
 BOOTCTL_OUT="$(new_tmp)"
 bootctl status >"$BOOTCTL_OUT" 2>/dev/null || fail 300 "bootctl status returned non-zero"
 SECURE_BOOT_LINE="$(awk -F': ' '/^[[:space:]]*Secure Boot:/ {print $2; exit}' "$BOOTCTL_OUT" | xargs)"
@@ -8524,7 +8550,7 @@ CURRENT_ENTRY="$(awk -F': ' '/^[[:space:]]*Current Entry:/ {print $2; exit}' "$B
 [ "$CURRENT_ENTRY" = "$EXP_DEFAULT_ENTRY" ] || fail 303 "Current Entry='$CURRENT_ENTRY' (expected '$EXP_DEFAULT_ENTRY')"; PASS=$((PASS+1))
 DEFAULT_ENTRY="$(awk -F': ' '/^[[:space:]]*Default Entry:/ {print $2; exit}' "$BOOTCTL_OUT" | xargs)"
 
-# Phase 4 (5) — running kernel + current UKI integrity
+# Phase 4 (5): running kernel + current UKI integrity
 KVER_NOW="$(uname -r)"
 [ "$KVER_NOW" = "$EXP_KVER_BOOTED" ] || fail 400 "running kernel='$KVER_NOW' (expected '$EXP_KVER_BOOTED')"; PASS=$((PASS+1))
 sha256sum "$UKI_PATH" | awk '{print $1}' | grep -Exq "$EXP_UKI_SHA" || fail 410 "current UKI sha drift"; PASS=$((PASS+1))
@@ -8532,30 +8558,30 @@ sbverify --cert "$DB_CRT" "$UKI_PATH" >/dev/null 2>&1 || fail 411 "current UKI s
 uki_has_pcr_sections "$UKI_PATH" || fail 412 "current UKI missing .pcrpkey or .pcrsig"; PASS=$((PASS+1))
 uki_vma_sane "$UKI_PATH" "$VMA_THRESHOLD" || fail 413 "current UKI section VMA anomaly"; PASS=$((PASS+1))
 
-# Phase 5 (4) — decider state across reboot
+# Phase 5 (4): decider state across reboot
 sha256sum "$BASELINE"      | awk '{print $1}' | grep -Exq "$EXP_BASELINE_SHA" || fail 500 "baseline sha drift"; PASS=$((PASS+1))
 sha256sum "$LAST_MANIFEST" | awk '{print $1}' | grep -Exq "$EXP_BASELINE_SHA" || fail 501 "last-manifest != baseline"; PASS=$((PASS+1))
 LD_DECISION="$(awk -F= '$1=="decision"{print $2}' "$LAST_DECISION")"
 [ "$LD_DECISION" = "helper-success" ] || fail 502 "last-decision.decision='$LD_DECISION'"; PASS=$((PASS+1))
 [ ! -e "$LAST_ERROR" ] || fail 503 "decider last-error present"; PASS=$((PASS+1))
 
-# Phase 6 (3) — helper state across reboot
+# Phase 6 (3): helper state across reboot
 [ ! -e "$SENTINEL" ]       || fail 600 "UNSAFE-TO-REBOOT sentinel present after reboot"; PASS=$((PASS+1))
 [ ! -e "$FAILURE_MARKER" ] || fail 601 "helper failure marker present after reboot";     PASS=$((PASS+1))
 [ ! -e "$FAILURE_LOG" ]    || fail 602 "helper failure log present after reboot";        PASS=$((PASS+1))
 
-# Phase 7 (1) — candidate still installed
+# Phase 7 (1): candidate still installed
 rpm -q "$CANDIDATE" >/dev/null 2>&1 || fail 700 "$CANDIDATE no longer installed"
 INSTALLED_NEVRA="$(rpm -q "$CANDIDATE")"; PASS=$((PASS+1))
 
-# Phase 8 (5) — trust-chain byte-stability across reboot
+# Phase 8 (5): trust-chain byte-stability across reboot
 sha256sum "$DECIDER"  | awk '{print $1}' | grep -Exq "$EXP_DECIDER_SHA"  || fail 800 "decider sha drift";          PASS=$((PASS+1))
 sha256sum "$HELPER"   | awk '{print $1}' | grep -Exq "$EXP_HELPER_SHA"   || fail 801 "helper sha drift";           PASS=$((PASS+1))
 sha256sum "$PREDICT"  | awk '{print $1}' | grep -Exq "$EXP_PREDICT_SHA"  || fail 802 "predict sha drift";          PASS=$((PASS+1))
 sha256sum "$HOOK"     | awk '{print $1}' | grep -Exq "$EXP_HOOK_SHA"     || fail 803 "hook sha drift";             PASS=$((PASS+1))
 sha256sum "$PRODRULE" | awk '{print $1}' | grep -Exq "$EXP_PRODRULE_SHA" || fail 804 "production rule sha drift";  PASS=$((PASS+1))
 
-# Phase 9 (3) — journal cleanliness since this boot (journalctl -b 0)
+# Phase 9 (3): journal cleanliness since this boot (journalctl -b 0)
 DEC_JOURNAL="$(new_tmp)"; HELP_JOURNAL="$(new_tmp)"; HOOK_JOURNAL="$(new_tmp)"
 journalctl -t tboot-dnf-posttrans -b 0 --no-pager -o cat >"$DEC_JOURNAL"  2>&1 || true
 journalctl -t tboot-dnf-helper    -b 0 --no-pager -o cat >"$HELP_JOURNAL" 2>&1 || true
@@ -8564,24 +8590,24 @@ if journal_has_error "$DEC_JOURNAL";  then show_error_lines "$DEC_JOURNAL";  fai
 if journal_has_error "$HELP_JOURNAL"; then show_error_lines "$HELP_JOURNAL"; fail 901 "helper journal has errors since this boot";  fi; PASS=$((PASS+1))
 if journal_has_error "$HOOK_JOURNAL"; then show_error_lines "$HOOK_JOURNAL"; fail 902 "80-tpm2-sign journal has errors since this boot"; fi; PASS=$((PASS+1))
 
-echo "=== B.2.4 Gate 6B — ${PASS}/28 PASS ==="
+echo "=== B.2.4 Gate 6B: ${PASS}/28 PASS ==="
 EOF
 ```
 
 ### Expected output
 
-- Gate 6A pre-reboot probe: `=== B.2.4 Gate 6A pre-reboot probe — 17/17 PASS ===`.
+- Gate 6A pre-reboot probe: `=== B.2.4 Gate 6A pre-reboot probe: 17/17 PASS ===`.
 - Gate 6A console observation (manual): firmware POST clean; systemd-boot menu auto-selects MID-prefixed 6.19.14 entry; **no LUKS passphrase prompt**; login prompt reached.
 - Gate 6A liveness: `uname -r` = `6.19.14-200.fc43.x86_64`; `boot_id` differs from pre-reboot value; `systemctl is-system-running` = `running`; small uptime.
-- Gate 6B: `=== B.2.4 Gate 6B — 28/28 PASS ===`. **Runtime PCR 11 = stored prediction `28E66CE2…C90F` byte-for-byte.** Secure Boot enabled (user). Measured UKI yes. Current Entry = MID-prefixed rebuilt UKI.
+- Gate 6B: `=== B.2.4 Gate 6B: 28/28 PASS ===`. **Runtime PCR 11 = stored prediction `28E66CE2…C90F` byte-for-byte.** Secure Boot enabled (user). Measured UKI yes. Current Entry = MID-prefixed rebuilt UKI.
 
 ### Stop condition
 
 - Gate 6A pre-reboot probe FAIL: halt; do not reboot; triage the specific assertion.
-- Gate 6A LUKS passphrase prompt at boot: hard fail. **Do not type the passphrase as part of validation** — typing it proves recovery works, not TPM auto-unlock. Roll back to `module5-b2-4-pre-reboot` or investigate in place; add a `06F` finding for the failure mode.
+- Gate 6A LUKS passphrase prompt at boot: hard fail. **Do not type the passphrase as part of validation**: typing it proves recovery works, not TPM auto-unlock. Roll back to `module5-b2-4-pre-reboot` or investigate in place; add a `06F` finding for the failure mode.
 - Gate 6A firmware Secure Boot rejection: roll back to `module5-b2-4-pre-reboot`. Capture forensics on the rebuilt UKI before rollback.
-- Gate 6B FAIL 200–202: PCR 11 byte-match broken — the core property B.2.4 was built to prove. Severe. Capture full TPM PCR state via `tpm2_pcrread sha256:0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15` (read-only) before rollback. Investigate firmware behaviour, hook output, predictor algorithm.
-- Gate 6B FAIL 301–303 / 400 / 410–413: boot-path or UKI-identity drift across reboot — severe; rollback.
+- Gate 6B FAIL 200–202: PCR 11 byte-match broken: the core property B.2.4 was built to prove. Severe. Capture full TPM PCR state via `tpm2_pcrread sha256:0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15` (read-only) before rollback. Investigate firmware behaviour, hook output, predictor algorithm.
+- Gate 6B FAIL 301–303 / 400 / 410–413: boot-path or UKI-identity drift across reboot: severe; rollback.
 - Gate 6B FAIL 500–503 / 600–602: state mutation across the reboot transition that should not have happened. Investigate, then rollback.
 - Gate 6B FAIL 900–902: post-reboot errors in decider/helper/hook journals; capture journal contents; do not snapshot or close Gate 7.
 
@@ -8591,15 +8617,15 @@ None at this step. Gate 7 closure snapshot is the next step.
 
 ---
 
-## Step 37: Block B.2.4 Gate 7 — closure snapshot + read-only ESP forensic audit + staged DNF discipline lift
+## Step 37: Block B.2.4 Gate 7: closure snapshot + read-only ESP forensic audit + staged DNF discipline lift
 
-**Goal:** take the closure snapshot, perform the read-only `/EFI/Linux/` forensic audit, document the audit results, and apply the staged discipline-gate lift. No cleanup at this step — cleanup of forensic UKIs is the scope of Block B.2.5.
+**Goal:** take the closure snapshot, perform the read-only `/EFI/Linux/` forensic audit, document the audit results, and apply the staged discipline-gate lift. No cleanup at this step: cleanup of forensic UKIs is the scope of Block B.2.5.
 **Prerequisites:** Step 36 (Gates 6A–6B) closed.
 **Where to run:** Step 1 (snapshot) on Proxmox host pve-host as root. Step 2 (audit) inside VM 500 as root.
 
 ### Commands
 
-**Step 1 — closure snapshot.**
+**Step 1: closure snapshot.**
 
 ```bash
 # Run on Proxmox host pve-host as root
@@ -8610,7 +8636,7 @@ qm listsnapshot 500
 qm status 500
 ```
 
-**Step 2 — read-only ESP `/EFI/Linux/` forensic audit.** Inventory every `.efi` / `.EFI` file: `ls -la`, sha256sum, sbverify against `db.crt`, `objdump -h` for section names, presence/absence of `.pcrpkey` and `.pcrsig`, VMA sanity vs `0x180000000`. No rename, no delete, no suffix application. Use `-iname` (case-insensitive) — ESP is VFAT and case-insensitive at the filesystem level.
+**Step 2: read-only ESP `/EFI/Linux/` forensic audit.** Inventory every `.efi` / `.EFI` file: `ls -la`, sha256sum, sbverify against `db.crt`, `objdump -h` for section names, presence/absence of `.pcrpkey` and `.pcrsig`, VMA sanity vs `0x180000000`. No rename, no delete, no suffix application. Use `-iname` (case-insensitive): ESP is VFAT and case-insensitive at the filesystem level.
 
 ```bash
 # Run on VM 500 as root
@@ -8650,7 +8676,7 @@ uki_section_names_csv() {
     objdump -h "$1" 2>/dev/null | awk '/^[[:space:]]+[0-9]+[[:space:]]+\./ {print $2}' | paste -sd, -
 }
 
-echo "=== B.2.4 Gate 7 Step 2 — ESP /EFI/Linux/ forensic audit ==="
+echo "=== B.2.4 Gate 7 Step 2: ESP /EFI/Linux/ forensic audit ==="
 echo "audit_dir: $EFI_DIR; verify_cert: $DB_CRT; vma_threshold: $VMA_THRESHOLD (06F B.1)"
 echo ""
 echo "--- A. Full ls -la ---"
@@ -8730,7 +8756,7 @@ EOF
 
 - Step 1 fails if `qm snapshot` returns non-zero or `qm listsnapshot 500` does not show `module5-b2-4-validated` parented to `module5-b2-4-pre-reboot` with `current` directly below.
 - Step 2 `exit 2` if the booted-kernel MID-prefixed UKI sha drifts from `0ac32c8b…6949` (mutation between Gate 6B and Gate 7 that should not have happened).
-- Step 2 finding any `EXPECTED` file failing `sbverify` against `db.crt`, missing `.pcrpkey`/`.pcrsig`, or with anomalous VMA: severe — rollback to `module5-b2-4-pre-reboot` before further work; the validated MID-prefixed UKIs must remain firmware-loadable and structurally sound.
+- Step 2 finding any `EXPECTED` file failing `sbverify` against `db.crt`, missing `.pcrpkey`/`.pcrsig`, or with anomalous VMA: severe: rollback to `module5-b2-4-pre-reboot` before further work; the validated MID-prefixed UKIs must remain firmware-loadable and structurally sound.
 
 ### Staged DNF discipline lift (applied at Step 37 close)
 
@@ -8738,15 +8764,20 @@ After Gate 7 closes (snapshot + audit + this runbook step + companion `06F` L.1 
 
 **Allowed:** `dnf install`/`remove`/`reinstall`/`upgrade` for non-systemd, non-kernel single packages (including dracut-sensitive ones) under normal operator review. The decider's `post_transaction` `.actions` rule fires on every transaction.
 
-**Still gated:** `dnf upgrade systemd*` (B.4/B.5 scope); `dnf reinstall systemd-boot*` (B.4 scope); `dnf upgrade kernel*` (kernel-package class not yet live-validated); blind `dnf update`/`dnf upgrade` without explicit package argument.
+**Still gated at the time of this step:** `dnf upgrade systemd*` (B.4/B.5
+scope); `dnf reinstall systemd-boot*` (B.4 scope); `dnf upgrade kernel*`
+(kernel-package class not yet live-validated); blind `dnf update`/`dnf upgrade`
+without an explicit package argument. B.4/B.5 later validated the systemd-boot
+path, and the 19 June 2026 operational run subsequently validated the full
+update and kernel-upgrade path.
 
 ### Snapshot point
 
-`module5-b2-4-validated` — **B.2.4 closure anchor; preferred rollback target for B.2.5 (ESP forensic cleanup), B.4 (systemd-boot signing automation), and all subsequent operational DNF transactions under the staged discipline lift.** Parent: `module5-b2-4-pre-reboot`. The deeper anchor `module5-b2-3-validated` remains valid as a pre-B.2.4 fallback.
+`module5-b2-4-validated`: **B.2.4 closure anchor; preferred rollback target for B.2.5 (ESP forensic cleanup), B.4 (systemd-boot signing automation), and all subsequent operational DNF transactions under the staged discipline lift.** Parent: `module5-b2-4-pre-reboot`. The deeper anchor `module5-b2-3-validated` remains valid as a pre-B.2.4 fallback.
 
 ### Step 37 closure
 
-✅ **Block B.2.4 closed end-to-end.** Gates 1–3 in Step 34 (positive drift path pre-reboot, 58/58 + snapshot + 43/43 PASS); Gate 4 in Step 35 (pre-reboot read-only cross-validation, 36/36 PASS); Gate 5 in Step 35 (`module5-b2-4-pre-reboot` snapshot); Gates 6A–6B in Step 36 (operator-attested clean reboot + post-reboot validation, 17/17 + 28/28 PASS); Gate 7 in Step 37 (closure snapshot `module5-b2-4-validated` + read-only ESP audit + staged DNF discipline lift). **Block B.2 full production flow: complete with staged discipline.** `dnf upgrade systemd*` remains separately blocked pending B.4/B.5. B.2.5 (ESP forensic UKI cleanup) is the next scheduled block — see `06F` L.1 and the futures table.
+✅ **Block B.2.4 closed end-to-end.** Gates 1–3 in Step 34 (positive drift path pre-reboot, 58/58 + snapshot + 43/43 PASS); Gate 4 in Step 35 (pre-reboot read-only cross-validation, 36/36 PASS); Gate 5 in Step 35 (`module5-b2-4-pre-reboot` snapshot); Gates 6A–6B in Step 36 (operator-attested clean reboot + post-reboot validation, 17/17 + 28/28 PASS); Gate 7 in Step 37 (closure snapshot `module5-b2-4-validated` + read-only ESP audit + staged DNF discipline lift). **Block B.2 full production flow: complete with staged discipline.** `dnf upgrade systemd*` remains separately blocked pending B.4/B.5. B.2.5 (ESP forensic UKI cleanup) is the next scheduled block: see `06F` L.1 and the futures table.
 
 ---
 
@@ -8754,33 +8785,33 @@ After Gate 7 closes (snapshot + audit + this runbook step + companion `06F` L.1 
 
 The full per-step recovery table is in **Appendix B** (end of document); it now includes the B.4 (Step 38) and B.5 (Step 39) rows.
 
-## Step 38: Block B.4 install/publish gate — install the systemd-boot signing chain, prime a non-converged baseline, mask the native updater (chain UNARMED)
+## Step 38: Block B.4 install/publish gate: install the systemd-boot signing chain, prime a non-converged baseline, mask the native updater (chain UNARMED)
 
-**Goal:** install the independent B.4 systemd-boot signing chain (helper + decider + state-dir), prime an intentionally non-converged baseline, and mask `systemd-boot-update.service` — leaving the chain installed but **unarmed**. The `60-tboot-sbloader.actions` rule is deliberately NOT published here; publishing it and the first controlled `dnf reinstall systemd-boot-unsigned` are Step 39 / Block B.5. This split (install + prime + mask in B.4; arm + fire in B.5) avoids a latent armed window over the non-converged baseline.
-**Prerequisites:** Block B.2 complete (`module5-b2-4-validated`). B.4 Gate 1 closed (rev-2 read-only preflight A–M + F3 supplemental unit-body probe N.1–N.6; mask-list locked = `systemd-boot-update.service` only; see `06F` N.5). B.4 Gate 2 probes closed (`install`-vs-`update` → `install`, `06F` N.1; direction → `in`, `06F` N.3/N.4). The three B.4 artifacts authored, staged in `/tmp`, and read-back-validated (`bash -n`, ShellCheck `-S warning` clean, forbidden-token scan, field/path/mode parses): helper `tboot-sbloader-helper` sha `1a411e850fe1b95c7f3f0d2c4674507dbfb6ef05fd2b0fdb0bf7d799cdd2f18f` (`0.1.0-draft-B.4-pre-validation-r4`, 415 lines), decider `tboot-sbloader-posttrans` sha `3ccef59c4d49e54d3e2f8ebff7775ec9ad407144b3bb87c15d2c24d2947df8e7` (`0.1.0-draft-B.4-pre-validation`, 304 lines), rule `60-tboot-sbloader.actions` sha `2e83fcfcd237359d02a831cb381d40ca221d319108d66c264b847956c0418274` (115 bytes; `post_transaction:systemd-boot-unsigned:in:enabled=host-only raise_error=1:/usr/local/sbin/tboot-sbloader-posttrans`). The decider `--help` must avoid the literal token `bootctl` in its heredoc (use "never invokes the loader installer") so the non-`#` forbidden-token scan stays clean (`06F` N.2).
+**Goal:** install the independent B.4 systemd-boot signing chain (helper + decider + state-dir), prime an intentionally non-converged baseline, and mask `systemd-boot-update.service`: leaving the chain installed but **unarmed**. The `60-tboot-sbloader.actions` rule is deliberately NOT published here; publishing it and the first controlled `dnf reinstall systemd-boot-unsigned` are Step 39 / Block B.5. This split (install + prime + mask in B.4; arm + fire in B.5) avoids a latent armed window over the non-converged baseline.
+**Prerequisites:** Block B.2 complete (`module5-b2-4-validated`). B.4 Gate 1 closed (rev-2 read-only preflight A–M + F3 supplemental unit-body probe N.1–N.6; mask-list locked = `systemd-boot-update.service` only; see `06F` N.5). B.4 Gate 2 probes closed (`install`-vs-`update` → `install`, `06F` N.1; direction → `in`, `06F` N.3/N.4). The three B.4 artifacts authored, staged in `/tmp`, and read-back-validated (`bash -n`, ShellCheck `-S warning` clean, forbidden-token scan, field/path/mode parses): helper `tboot-sbloader-helper` sha `b9df2534b1539355a3c040ee296611f5da629e76467fccfcd44f6ed56325690f` (`1.0.0`, 421 lines), decider `tboot-sbloader-posttrans` sha `b8d9a04c30cd39ee3600fb3ff8f581d7cf284f7f4aa639f03cf0fd733e705f0c` (`1.0.0`, 315 lines), rule `60-tboot-sbloader.actions` sha `2e83fcfcd237359d02a831cb381d40ca221d319108d66c264b847956c0418274` (115 bytes; `post_transaction:systemd-boot-unsigned:in:enabled=host-only raise_error=1:/usr/local/sbin/tboot-sbloader-posttrans`). The decider `--help` must avoid the literal token `bootctl` in its heredoc (use "never invokes the loader installer") so the non-`#` forbidden-token scan stays clean (`06F` N.2).
 **Where to run:** Step 0 + Step 8 snapshots on Proxmox host pve-host; Steps 1–7 on VM 500 as root.
 
 > [!important] Run every mutation block inside a child shell
 > Each install step runs inside `bash <<'B4_STEPn' ... B4_STEPn` with `set -euo pipefail` and a `fail(){ echo "ABORT: $*" >&2; exit 1; }` so a failed precondition or gate invariant hard-aborts. Do not paste `set -u` at the interactive top level (`06F` N.2). Each step ends with `STEP n PASS` only if every assertion held.
 
-### Step 38 artifact sources (inline, byte-exact — required for reproducibility)
+### Step 38 artifact sources (inline, byte-exact: required for reproducibility)
 
 These are the complete, byte-exact sources of the three B.4 artifacts. Stage them in `/tmp` first (single-quoted heredocs → no shell expansion), then the gate steps below install/prime them. After staging, the sha-verify block must match the locked shas exactly before proceeding. Run inside VM 500.
 
-**Helper** — `tboot-sbloader-helper` (r4, sha `1a411e850fe1b95c7f3f0d2c4674507dbfb6ef05fd2b0fdb0bf7d799cdd2f18f`, 415 lines):
+**Helper**: `tboot-sbloader-helper` (sha `b9df2534b1539355a3c040ee296611f5da629e76467fccfcd44f6ed56325690f`, 421 lines):
 
 ```bash
 cat > /tmp/tboot-sbloader-helper.staged <<'TBOOT_SBLOADER_HELPER_EOF'
 #!/usr/bin/env bash
-# tboot-sbloader-helper — B.4 systemd-boot signing + propagation worker
-# Version: 0.1.0-draft-B.4-pre-validation-r4
+# tboot-sbloader-helper: B.4 systemd-boot signing + propagation worker
+# Version: 1.0.0
 # Role: sign the source systemd-boot loader with the local db key, PROVE in a
 #       throwaway loopback ESP that 'bootctl --no-variables install' selects the
 #       signed binary for BOTH propagation targets, then propagate to the real
 #       ESP. Fail-closed before any real-ESP write. UKI/PCR signing is NOT this
 #       script's job.
 #
-# State layout — B.4 single locked dir /var/lib/tboot-sbloader (Option A):
+# State layout: B.4 single locked dir /var/lib/tboot-sbloader (Option A):
 #   helper-last-error, helper-last-success            (this script)
 #   sbloader-manifest.baseline, last-computed-manifest,
 #   last-decision, last-error                         (decider: tboot-sbloader-posttrans)
@@ -8789,7 +8820,7 @@ cat > /tmp/tboot-sbloader-helper.staged <<'TBOOT_SBLOADER_HELPER_EOF'
 set -euo pipefail
 umask 077
 
-readonly VERSION="0.1.0-draft-B.4-pre-validation-r4"
+readonly VERSION="1.0.0"
 readonly TAG="tboot-sbloader-helper"
 
 readonly SOURCE_EFI="/usr/lib/systemd/boot/efi/systemd-bootx64.efi"
@@ -8826,8 +8857,14 @@ _signer_count() {
 }
 
 _ensure_state_dir() {
-  [ -d "$STATE_DIR" ] && return 0
-  install -d -m 0700 -o root -g root "$STATE_DIR"
+  if [ ! -e "$STATE_DIR" ]; then
+    install -d -m 0700 -o root -g root "$STATE_DIR" || return 1
+  fi
+  [ ! -L "$STATE_DIR" ] || return 1
+  [ -d "$STATE_DIR" ] || return 1
+  [ "$(stat -c '%U:%G' "$STATE_DIR" 2>/dev/null)" = "root:root" ] || return 1
+  [ "$(stat -c '%a' "$STATE_DIR" 2>/dev/null)" = "700" ] || return 1
+  [ -w "$STATE_DIR" ] || return 1
 }
 
 _write_last_error() {
@@ -8851,7 +8888,7 @@ _write_last_error() {
 }
 
 _ensure_sentinel() {
-  # normal mode only — never mark the boot path unsafe from self-test/dry-run
+  # normal mode only: never mark the boot path unsafe from self-test/dry-run
   [ "$MODE" = "normal" ] || return 0
 
   local reason="$1"
@@ -8911,7 +8948,7 @@ preflight() {
   require_root
 
   local b
-  for b in sbsign sbverify pesign bootctl mkfs.vfat mount umount losetup sha256sum logger install awk flock; do
+  for b in sbsign sbverify pesign bootctl mkfs.vfat mount umount losetup sha256sum logger install awk flock stat; do
     command -v "$b" >/dev/null 2>&1 || die_stage "preflight" "missing binary: $b"
   done
 
@@ -9005,16 +9042,16 @@ loopback_checkpoint() {
 
   # BOTH targets must equal .efi.signed and differ from the unsigned source.
   [ "$got_sys" = "$signed_sha" ] \
-    || die_stage "checkpoint" "sandbox /EFI/systemd != .efi.signed (got=$got_sys signed=$signed_sha) — real ESP NOT touched"
+    || die_stage "checkpoint" "sandbox /EFI/systemd != .efi.signed (got=$got_sys signed=$signed_sha): real ESP NOT touched"
 
   [ "$got_boot" = "$signed_sha" ] \
-    || die_stage "checkpoint" "sandbox /EFI/BOOT/BOOTX64.EFI != .efi.signed (got=$got_boot signed=$signed_sha) — real ESP NOT touched"
+    || die_stage "checkpoint" "sandbox /EFI/BOOT/BOOTX64.EFI != .efi.signed (got=$got_boot signed=$signed_sha): real ESP NOT touched"
 
   [ "$got_sys" != "$src_sha" ] \
-    || die_stage "checkpoint" "sandbox /EFI/systemd == unsigned source — real ESP NOT touched"
+    || die_stage "checkpoint" "sandbox /EFI/systemd == unsigned source: real ESP NOT touched"
 
   [ "$got_boot" != "$src_sha" ] \
-    || die_stage "checkpoint" "sandbox /EFI/BOOT == unsigned source — real ESP NOT touched"
+    || die_stage "checkpoint" "sandbox /EFI/BOOT == unsigned source: real ESP NOT touched"
 
   log "checkpoint PASS: bootctl install selected .efi.signed for BOTH targets in sandbox ESP ($signed_sha)"
 }
@@ -9189,22 +9226,22 @@ main "$@"
 TBOOT_SBLOADER_HELPER_EOF
 ```
 
-**Decider** — `tboot-sbloader-posttrans` (sha `3ccef59c4d49e54d3e2f8ebff7775ec9ad407144b3bb87c15d2c24d2947df8e7`, 304 lines):
+**Decider**: `tboot-sbloader-posttrans` (sha `b8d9a04c30cd39ee3600fb3ff8f581d7cf284f7f4aa639f03cf0fd733e705f0c`, 315 lines):
 
 ```bash
 cat > /tmp/tboot-sbloader-posttrans.staged <<'TBOOT_SBLOADER_POSTTRANS_EOF'
 #!/usr/bin/env bash
-# tboot-sbloader-posttrans — B.4 systemd-boot signing DECIDER (read-and-decide)
-# Version: 0.1.0-draft-B.4-pre-validation
+# tboot-sbloader-posttrans: B.4 systemd-boot signing DECIDER (read-and-decide)
+# Version: 1.0.0
 # Role: compute the 5-entry boot-loader manifest, compare to the stored baseline,
 #       and decide. On confirmed drift, invoke the helper (which signs and
 #       propagates to the ESP). This script NEVER signs, NEVER runs the loader
-#       installer, and NEVER writes the ESP — it only reads, hashes, compares,
+#       installer, and NEVER writes the ESP: it only reads, hashes, compares,
 #       records its own state files, manages the shared sentinel, and calls the
 #       helper.
 # Future canonical path: /usr/local/sbin/tboot-sbloader-posttrans (UsrMerge-aware).
 #
-# State layout — B.4 single locked dir /var/lib/tboot-sbloader (Option A):
+# State layout: B.4 single locked dir /var/lib/tboot-sbloader (Option A):
 #   sbloader-manifest.baseline, last-computed-manifest,
 #   last-decision, last-error                 (this decider)
 #   helper-last-error, helper-last-success    (helper: tboot-sbloader-helper)
@@ -9213,7 +9250,7 @@ cat > /tmp/tboot-sbloader-posttrans.staged <<'TBOOT_SBLOADER_POSTTRANS_EOF'
 set -euo pipefail
 umask 077
 
-readonly VERSION="0.1.0-draft-B.4-pre-validation"
+readonly VERSION="1.0.0"
 readonly TAG="tboot-sbloader-posttrans"
 
 # Inputs (read-only here)
@@ -9223,7 +9260,7 @@ readonly ESP_SYSTEMD="/boot/efi/EFI/systemd/systemd-bootx64.efi"
 readonly ESP_BOOT="/boot/efi/EFI/BOOT/BOOTX64.EFI"
 readonly PKG="systemd-boot-unsigned"
 
-# Helper — sole privileged worker; the ONLY external command the decider invokes.
+# Helper: sole privileged worker; the ONLY external command the decider invokes.
 readonly HELPER="/usr/local/sbin/tboot-sbloader-helper"
 
 # Locked Option A single state dir
@@ -9277,14 +9314,20 @@ require_root() {
 
 _check_binaries() {
   local b
-  for b in sha256sum rpm awk logger install flock date id cat head mv; do
+  for b in sha256sum rpm awk logger install flock date id cat head mv stat; do
     command -v "$b" >/dev/null 2>&1 || die "preflight" "missing binary: $b"
   done
 }
 
 _ensure_state_dir() {
-  [ -d "$STATE_DIR" ] && return 0
-  install -d -m 0700 -o root -g root "$STATE_DIR"
+  if [ ! -e "$STATE_DIR" ]; then
+    install -d -m 0700 -o root -g root "$STATE_DIR" || return 1
+  fi
+  [ ! -L "$STATE_DIR" ] || return 1
+  [ -d "$STATE_DIR" ] || return 1
+  [ "$(stat -c '%U:%G' "$STATE_DIR" 2>/dev/null)" = "root:root" ] || return 1
+  [ "$(stat -c '%a' "$STATE_DIR" 2>/dev/null)" = "700" ] || return 1
+  [ -w "$STATE_DIR" ] || return 1
 }
 
 die() {
@@ -9423,7 +9466,7 @@ mode_normal() {
   _check_binaries
   _ensure_state_dir || die "normal" "cannot create $STATE_DIR"
 
-  [ -f "$BASELINE" ] || die "baseline" "baseline absent; refuse to auto-init in normal mode — run: $TAG --prime"
+  [ -f "$BASELINE" ] || die "baseline" "baseline absent; refuse to auto-init in normal mode: run: $TAG --prime"
 
   local cur
   cur="$(compute_manifest)"
@@ -9437,11 +9480,16 @@ mode_normal() {
   fi
 
   # --- drift path: mark unsafe BEFORE invoking helper ---
-  printf 'reason=%s\ndate=%s\n' "drift before sbloader propagation: $REASON" "$(date -Iseconds)" \
-    > "${SENTINEL}.tmp" 2>/dev/null && mv -f "${SENTINEL}.tmp" "$SENTINEL" 2>/dev/null || true
-  chmod 0600 "$SENTINEL" 2>/dev/null || true
+  local sentinel_tmp="${SENTINEL}.tmp.$$"
+  if ! printf 'reason=%s\ndate=%s\n' "drift before sbloader propagation: $REASON" "$(date -Iseconds)" \
+      > "$sentinel_tmp" 2>/dev/null \
+      || ! chmod 0600 "$sentinel_tmp" 2>/dev/null \
+      || ! mv -f "$sentinel_tmp" "$SENTINEL" 2>/dev/null; then
+    rm -f "$sentinel_tmp" 2>/dev/null || true
+    die "sentinel" "cannot mark system unsafe; helper not invoked"
+  fi
   write_last_decision "drift-detected" "$REASON; invoking helper"
-  log "drift: $REASON — invoking helper"
+  log "drift: $REASON: invoking helper"
 
   [ -x "$HELPER" ] || die "helper" "helper not executable: $HELPER (sentinel retained)"
 
@@ -9500,7 +9548,7 @@ main "$@"
 TBOOT_SBLOADER_POSTTRANS_EOF
 ```
 
-**Rule** — `60-tboot-sbloader.actions` (sha `2e83fcfcd237359d02a831cb381d40ca221d319108d66c264b847956c0418274`, 115 bytes, 1 line; published in B.5, not B.4):
+**Rule**: `60-tboot-sbloader.actions` (sha `2e83fcfcd237359d02a831cb381d40ca221d319108d66c264b847956c0418274`, 115 bytes, 1 line; published in B.5, not B.4):
 
 ```bash
 printf '%s\n' 'post_transaction:systemd-boot-unsigned:in:enabled=host-only raise_error=1:/usr/local/sbin/tboot-sbloader-posttrans' > /tmp/60-tboot-sbloader.actions.staged
@@ -9512,8 +9560,8 @@ printf '%s\n' 'post_transaction:systemd-boot-unsigned:in:enabled=host-only raise
 for f in helper posttrans; do sha256sum /tmp/tboot-sbloader-$f.staged; done
 sha256sum /tmp/60-tboot-sbloader.actions.staged
 # expect:
-#   1a411e850fe1b95c7f3f0d2c4674507dbfb6ef05fd2b0fdb0bf7d799cdd2f18f  /tmp/tboot-sbloader-helper.staged
-#   3ccef59c4d49e54d3e2f8ebff7775ec9ad407144b3bb87c15d2c24d2947df8e7  /tmp/tboot-sbloader-posttrans.staged
+#   b9df2534b1539355a3c040ee296611f5da629e76467fccfcd44f6ed56325690f  /tmp/tboot-sbloader-helper.staged
+#   b8d9a04c30cd39ee3600fb3ff8f581d7cf284f7f4aa639f03cf0fd733e705f0c  /tmp/tboot-sbloader-posttrans.staged
 #   2e83fcfcd237359d02a831cb381d40ca221d319108d66c264b847956c0418274  /tmp/60-tboot-sbloader.actions.staged
 ```
 
@@ -9531,7 +9579,7 @@ qm listsnapshot 500
 bash <<'B4_STEP1'
 set -euo pipefail
 SRC=/tmp/tboot-sbloader-helper.staged; DST=/usr/local/sbin/tboot-sbloader-helper
-EXPECT=1a411e850fe1b95c7f3f0d2c4674507dbfb6ef05fd2b0fdb0bf7d799cdd2f18f
+EXPECT=b9df2534b1539355a3c040ee296611f5da629e76467fccfcd44f6ed56325690f
 fail(){ echo "ABORT: $*" >&2; exit 1; }
 [ "$(sha256sum "$SRC"|awk '{print $1}')" = "$EXPECT" ] || fail "staged sha"
 [ ! -e "$DST" ] && [ ! -e /usr/local/bin/tboot-sbloader-helper ] || fail "already present"
@@ -9548,10 +9596,10 @@ B4_STEP1
 bash <<'B4_STEP2'
 set -euo pipefail
 SRC=/tmp/tboot-sbloader-posttrans.staged; DST=/usr/local/sbin/tboot-sbloader-posttrans
-EXPECT=3ccef59c4d49e54d3e2f8ebff7775ec9ad407144b3bb87c15d2c24d2947df8e7
+EXPECT=b8d9a04c30cd39ee3600fb3ff8f581d7cf284f7f4aa639f03cf0fd733e705f0c
 fail(){ echo "ABORT: $*" >&2; exit 1; }
 [ "$(sha256sum "$SRC"|awk '{print $1}')" = "$EXPECT" ] || fail "staged sha"
-[ "$(sha256sum /usr/local/sbin/tboot-sbloader-helper|awk '{print $1}')" = 1a411e850fe1b95c7f3f0d2c4674507dbfb6ef05fd2b0fdb0bf7d799cdd2f18f ] || fail "helper drift"
+[ "$(sha256sum /usr/local/sbin/tboot-sbloader-helper|awk '{print $1}')" = b9df2534b1539355a3c040ee296611f5da629e76467fccfcd44f6ed56325690f ] || fail "helper drift"
 [ ! -e "$DST" ] && [ ! -e /usr/local/bin/tboot-sbloader-posttrans ] || fail "already present"
 REALDIR="$(readlink -f "$(dirname "$DST")")"
 TMP="$(mktemp "${REALDIR}/.tboot-sbloader-posttrans.XXXXXX")"; trap 'rm -f "$TMP" 2>/dev/null||true' EXIT
@@ -9608,14 +9656,14 @@ echo "===== STEP 7: B.4 post-gate read-only sweep ====="
 echo "host=$(hostname)  kver=$(uname -r)  utc=$(date -u +%FT%TZ)"
 
 echo "---- artifacts: B.4 chain (sha + perms) ----"
-shachk  /usr/local/sbin/tboot-sbloader-helper    1a411e850fe1b95c7f3f0d2c4674507dbfb6ef05fd2b0fdb0bf7d799cdd2f18f
-shachk  /usr/local/sbin/tboot-sbloader-posttrans 3ccef59c4d49e54d3e2f8ebff7775ec9ad407144b3bb87c15d2c24d2947df8e7
+shachk  /usr/local/sbin/tboot-sbloader-helper    b9df2534b1539355a3c040ee296611f5da629e76467fccfcd44f6ed56325690f
+shachk  /usr/local/sbin/tboot-sbloader-posttrans b8d9a04c30cd39ee3600fb3ff8f581d7cf284f7f4aa639f03cf0fd733e705f0c
 permchk /usr/local/sbin/tboot-sbloader-helper    "755 root:root"
 permchk /usr/local/sbin/tboot-sbloader-posttrans "755 root:root"
 
 echo "---- artifacts: B.2 chain (must be untouched) ----"
-shachk  /usr/local/sbin/tboot-dnf-posttrans      35ad8733f190483f1bd6d071d2aa7cb8b1549286f9040086182443c584473cdd
-shachk  /usr/local/sbin/tboot-dnf-helper         4bef223925d3a2520e692403f0c0dd8a932770ec17136008a3d5f6f0b2620f4b
+shachk  /usr/local/sbin/tboot-dnf-posttrans      1e75110935a72fc9433c9b4bf5688d26bc6d3bd1e02f4388b5e1f32ff1e5cc05
+shachk  /usr/local/sbin/tboot-dnf-helper         937afc7a0d199bf7b7d1a5f5bcccf45c37c0f4f7dd0ad924b2567c4da7125e44
 
 echo "---- state-dir: exactly 3 files, 0700 dir / 0600 files ----"
 permchk /var/lib/tboot-sbloader                            "700 root:root"
@@ -9667,13 +9715,13 @@ B4_STEP7
 
 # --- Step 8 (host pve-host): closure snapshot ---
 qm snapshot 500 module5-b4-installed \
-  --description "B.4 install/publish CLOSED. Chain installed + primed + masked, UNARMED. helper 1a411e85..f18f; decider 3ccef59c..f8e7; baseline 2547bd82..cc5e (PRE-CONVERGENCE src_signed=ABSENT); systemd-boot-update.service masked (-> /dev/null); .efi.signed ABSENT; 60- UNPUBLISHED (B.5). ESP 73b0c6c4..9f41; B.2 chain + 50- intact; runtime PCR11 = 28E66CE2..C90F. Rollback target for B.5."
+  --description "B.4 install/publish CLOSED. Chain installed + primed + masked, UNARMED. helper b9df2534..690f; decider b8d9a04c..5f0c; baseline 2547bd82..cc5e (PRE-CONVERGENCE src_signed=ABSENT); systemd-boot-update.service masked (-> /dev/null); .efi.signed ABSENT; 60- UNPUBLISHED (B.5). ESP 73b0c6c4..9f41; B.2 chain + 50- intact; runtime PCR11 = 28E66CE2..C90F. Rollback target for B.5."
 qm listsnapshot 500
 ```
 
 ### Expected output
 
-Step 1/2: `--version` prints `...-r4` (helper) and `0.1.0-draft-B.4-pre-validation` (decider); both resolve to `/usr/local/bin` via UsrMerge (`06F` I.3), shared inode source/canonical. Step 3: `mode=700 owner=root:root`, 0 entries. Step 4: helper self-test PASS (preflight only, no state/sentinel), decider self-test PASS (helper-present non-warn), `--debug-print` shows `src_signed=ABSENT` + `would-be decision: drift (equal=0 shape=0)`; state-dir still 0 entries. Step 5: baseline `2547bd82...cc5e`, `last-decision=primed`, no sentinel; **post-prime `--debug-print` = `drift (equal=1 shape=0)`** (D-1 proof; `06F` N.6). Step 6: `is-enabled`=masked, symlink `/dev/null`; the other four `bootctl`-referencing units NOT masked. Step 8: `module5-b4-installed` present, `current` directly below, VM `status: running`.
+Step 1/2: `--version` prints `...-r4` (helper) and `1.0.0` (decider); both resolve to `/usr/local/bin` via UsrMerge (`06F` I.3), shared inode source/canonical. Step 3: `mode=700 owner=root:root`, 0 entries. Step 4: helper self-test PASS (preflight only, no state/sentinel), decider self-test PASS (helper-present non-warn), `--debug-print` shows `src_signed=ABSENT` + `would-be decision: drift (equal=0 shape=0)`; state-dir still 0 entries. Step 5: baseline `2547bd82...cc5e`, `last-decision=primed`, no sentinel; **post-prime `--debug-print` = `drift (equal=1 shape=0)`** (D-1 proof; `06F` N.6). Step 6: `is-enabled`=masked, symlink `/dev/null`; the other four `bootctl`-referencing units NOT masked. Step 8: `module5-b4-installed` present, `current` directly below, VM `status: running`.
 
 ### Stop condition
 
@@ -9688,21 +9736,21 @@ Step 1/2: `--version` prints `...-r4` (helper) and `0.1.0-draft-B.4-pre-validati
 - Step 0: `module5-b4-pre-install-publish` (pre-install anchor; rollback target for Steps 1–8).
 - Step 8: `module5-b4-installed` (gate-close anchor; rollback target for B.5). Chain installed + primed (non-converged) + masked, **UNARMED**.
 
-> [!note] Step 39 / Block B.5 — executed and validated 2026-05-28; full procedure is documented as Step 39 below
+> [!note] Step 39 / Block B.5: executed and validated 2026-05-28; full procedure is documented as Step 39 below
 > Publishing `/etc/dnf/libdnf5-plugins/actions.d/60-tboot-sbloader.actions` (atomic `mktemp`+`install`+`mv -T` from the staged `2e83fcfc...8274`) and the first controlled `dnf reinstall systemd-boot-unsigned` are Block B.5. On first fire the decider detects drift (primed baseline is non-converged), writes the sentinel, invokes the helper; the helper signs `systemd-bootx64.efi` → `.efi.signed`, verifies (sbverify + signer_count==1), runs the loopback both-target checkpoint (proves `bootctl --no-variables install` picks `.efi.signed`, fail-closed before touching `/boot/efi`; `06F` N.1), propagates to `/EFI/systemd/` + `/EFI/BOOT/BOOTX64.EFI`; the decider confirms converged-shape, advances the baseline, clears the sentinel. Then reboot validation: runtime PCR 11 byte-match, no LUKS passphrase. Closes the discipline gate on `dnf upgrade systemd*`.
 
-## Step 39: Block B.5 — arm, first-fire, converge, reboot-validate (closes the discipline gate on `dnf upgrade systemd*`)
+## Step 39: Block B.5: arm, first-fire, converge, reboot-validate (closes the discipline gate on `dnf upgrade systemd*`)
 
-**Goal:** Take the B.4 systemd-boot signing chain from installed + primed + masked + **UNARMED** to **armed + converged + reboot-validated**. Publish the single arming action `60-tboot-sbloader.actions`, fire one controlled `dnf reinstall systemd-boot-unsigned`, prove both signing chains converged, and confirm across a real reboot that LUKS still unlocks via TPM2 with no passphrase. Closes the `dnf upgrade systemd*` discipline gate. No new privileged source is added — the reproducible artifacts are the seven gate scripts below.
-**Prerequisites:** Step 38 closed; rollback anchor `module5-b4-installed`. Entry state: helper `1a411e85…f18f` (r4), decider `3ccef59c…f8e7`, baseline `2547bd82…cc5e` (`src_signed=ABSENT`, non-converged), `60-` rule staged at `/tmp/60-tboot-sbloader.actions.staged` (`2e83fcfc…8274`, 115 bytes) but UNPUBLISHED, `.efi.signed` absent, `systemd-boot-update.service` masked, B.2 chain intact, runtime PCR 11 = `28E66CE2…C90F`.
+**Goal:** Take the B.4 systemd-boot signing chain from installed + primed + masked + **UNARMED** to **armed + converged + reboot-validated**. Publish the single arming action `60-tboot-sbloader.actions`, fire one controlled `dnf reinstall systemd-boot-unsigned`, prove both signing chains converged, and confirm across a real reboot that LUKS still unlocks via TPM2 with no passphrase. Closes the `dnf upgrade systemd*` discipline gate. No new privileged source is added: the reproducible artifacts are the seven gate scripts below.
+**Prerequisites:** Step 38 closed; rollback anchor `module5-b4-installed`. Entry state: helper `b9df2534…690f`, decider `b8d9a04c…5f0c`, baseline `2547bd82…cc5e` (`src_signed=ABSENT`, non-converged), `60-` rule staged at `/tmp/60-tboot-sbloader.actions.staged` (`2e83fcfc…8274`, 115 bytes) but UNPUBLISHED, `.efi.signed` absent, `systemd-boot-update.service` masked, B.2 chain intact, runtime PCR 11 = `28E66CE2…C90F`.
 **Where to run:** Fedora VM 500 as root for Gates 0–4 and 6; Proxmox host pve-host for the Gate 5 and Gate 7 snapshots; Gate 6a is the reboot.
 
-> [!important] Two-chain co-fire on first fire — expected, not a failure
-> The B.2 rule (`50-`, empty `package_filter`) fires on every transaction; the B.4 rule (`60-`) is narrow (`systemd-boot-unsigned`). The first-fire transaction legitimately triggers **both**: B.2 rebuilds + re-signs both UKIs first (PCR 11 stays `28E66CE2…C90F`, baseline advances), then B.4 signs `systemd-bootx64.efi` → `.efi.signed` and converges. Consequence the gates handle: the B.2 baseline and both ESP UKIs advance during Gate 3, so their pre-B.5 pins are superseded — Gate 4 re-pins them. The booted UKI's file-sha changes while predicted PCR 11 stays byte-identical (PCR 11 measures section content, not the whole-file signature/timestamp), which is exactly why Gate 6 unlocks LUKS with no passphrase. Do not read the co-fire as a failure and do not roll back on it. Full mental model: `06C`; findings `06F` O.1–O.3, E.3, K.3.
+> [!important] Two-chain co-fire on first fire: expected, not a failure
+> The B.2 rule (`50-`, empty `package_filter`) fires on every transaction; the B.4 rule (`60-`) is narrow (`systemd-boot-unsigned`). The first-fire transaction legitimately triggers **both**: B.2 rebuilds + re-signs both UKIs first (PCR 11 stays `28E66CE2…C90F`, baseline advances), then B.4 signs `systemd-bootx64.efi` → `.efi.signed` and converges. Consequence the gates handle: the B.2 baseline and both ESP UKIs advance during Gate 3, so their pre-B.5 pins are superseded: Gate 4 re-pins them. The booted UKI's file-sha changes while predicted PCR 11 stays byte-identical (PCR 11 measures section content, not the whole-file signature/timestamp), which is exactly why Gate 6 unlocks LUKS with no passphrase. Do not read the co-fire as a failure and do not roll back on it. Full assumption: `06C`; findings `06F` O.1–O.3, E.3, K.3.
 
 ### Step 39 commands
 
-Seven gates, strictly one at a time. Read-only verification gates (0, 2, 4, 6b) tally all checks then exit non-zero on any failure; state-changing gates (1, 3) run `set -euo pipefail` **inside** the `bash <<'EOF'` child only (never at the interactive top level — `06F` N.2) and fail closed. Gate 5 is a host-side snapshot. Gate 6a is the reboot. Decider `--debug-print` is read-only (proven at B.4) and is used as the authoritative ESP-hash source so the harness never hardcodes ESP loader paths.
+Seven gates, strictly one at a time. Read-only verification gates (0, 2, 4, 6b) tally all checks then exit non-zero on any failure; state-changing gates (1, 3) run `set -euo pipefail` **inside** the `bash <<'EOF'` child only (never at the interactive top level: `06F` N.2) and fail closed. Gate 5 is a host-side snapshot. Gate 6a is the reboot. Decider `--debug-print` is read-only (proven at B.4) and is used as the authoritative ESP-hash source so the harness never hardcodes ESP loader paths.
 
 ```bash
 # --- GATE 0 (VM 500): read-only pre-arm verification (no publish, no DNF) ---
@@ -9727,13 +9775,13 @@ echo "host=$(hostname)  kver=$(uname -r)  utc=$(date -u +%FT%TZ)"
 echo
 
 echo "---- 1. artifact SHA256 (B.4) ----"
-shachk /usr/local/sbin/tboot-sbloader-helper    1a411e850fe1b95c7f3f0d2c4674507dbfb6ef05fd2b0fdb0bf7d799cdd2f18f
-shachk /usr/local/sbin/tboot-sbloader-posttrans 3ccef59c4d49e54d3e2f8ebff7775ec9ad407144b3bb87c15d2c24d2947df8e7
+shachk /usr/local/sbin/tboot-sbloader-helper    b9df2534b1539355a3c040ee296611f5da629e76467fccfcd44f6ed56325690f
+shachk /usr/local/sbin/tboot-sbloader-posttrans b8d9a04c30cd39ee3600fb3ff8f581d7cf284f7f4aa639f03cf0fd733e705f0c
 echo
 echo "---- 1b. artifact SHA256 (B.2 + UKI hook, must be untouched) ----"
-shachk /usr/local/sbin/tboot-dnf-posttrans      35ad8733f190483f1bd6d071d2aa7cb8b1549286f9040086182443c584473cdd
-shachk /usr/local/sbin/tboot-dnf-helper         4bef223925d3a2520e692403f0c0dd8a932770ec17136008a3d5f6f0b2620f4b
-shachk /etc/kernel/install.d/80-tpm2-sign.install a455444a54f5be265f822d85f4681cba8ed5365a4323c9008835022f3b8c502f
+shachk /usr/local/sbin/tboot-dnf-posttrans      1e75110935a72fc9433c9b4bf5688d26bc6d3bd1e02f4388b5e1f32ff1e5cc05
+shachk /usr/local/sbin/tboot-dnf-helper         937afc7a0d199bf7b7d1a5f5bcccf45c37c0f4f7dd0ad924b2567c4da7125e44
+shachk /etc/kernel/install.d/80-tpm2-sign.install 5857e51d5551e05a7ca384f71529ec2fef07f5a6dbe40df70c6bbe49d720947e
 echo
 
 echo "---- 2. baseline manifest (SHA + content) ----"
@@ -9793,7 +9841,7 @@ if [ -e /tmp/60-tboot-sbloader.actions.staged ]; then
   shachk /tmp/60-tboot-sbloader.actions.staged 2e83fcfcd237359d02a831cb381d40ca221d319108d66c264b847956c0418274
   sz=$(stat -c '%s' /tmp/60-tboot-sbloader.actions.staged); chk "staged size" "$sz" "115"
 else
-  info "staged rule absent — Gate 1 will regenerate from canonical one-liner and verify SHA"
+  info "staged rule absent: Gate 1 will regenerate from canonical one-liner and verify SHA"
 fi
 echo
 
@@ -9853,12 +9901,12 @@ echo
 echo "---- pre-publish guard ----"
 
 # artifact integrity (B.4)
-shaeq /usr/local/sbin/tboot-sbloader-helper    1a411e850fe1b95c7f3f0d2c4674507dbfb6ef05fd2b0fdb0bf7d799cdd2f18f
-shaeq /usr/local/sbin/tboot-sbloader-posttrans 3ccef59c4d49e54d3e2f8ebff7775ec9ad407144b3bb87c15d2c24d2947df8e7
+shaeq /usr/local/sbin/tboot-sbloader-helper    b9df2534b1539355a3c040ee296611f5da629e76467fccfcd44f6ed56325690f
+shaeq /usr/local/sbin/tboot-sbloader-posttrans b8d9a04c30cd39ee3600fb3ff8f581d7cf284f7f4aa639f03cf0fd733e705f0c
 # artifact integrity (B.2 + UKI hook untouched)
-shaeq /usr/local/sbin/tboot-dnf-posttrans      35ad8733f190483f1bd6d071d2aa7cb8b1549286f9040086182443c584473cdd
-shaeq /usr/local/sbin/tboot-dnf-helper         4bef223925d3a2520e692403f0c0dd8a932770ec17136008a3d5f6f0b2620f4b
-shaeq /etc/kernel/install.d/80-tpm2-sign.install a455444a54f5be265f822d85f4681cba8ed5365a4323c9008835022f3b8c502f
+shaeq /usr/local/sbin/tboot-dnf-posttrans      1e75110935a72fc9433c9b4bf5688d26bc6d3bd1e02f4388b5e1f32ff1e5cc05
+shaeq /usr/local/sbin/tboot-dnf-helper         937afc7a0d199bf7b7d1a5f5bcccf45c37c0f4f7dd0ad924b2567c4da7125e44
+shaeq /etc/kernel/install.d/80-tpm2-sign.install 5857e51d5551e05a7ca384f71529ec2fef07f5a6dbe40df70c6bbe49d720947e
 
 # baseline integrity + non-converged shape
 shaeq /var/lib/tboot-sbloader/sbloader-manifest.baseline 2547bd821f978b2a85a919a11d08b32c5062925a9da7fdcf8e1d8a6e7ab4cc5e
@@ -9945,8 +9993,8 @@ if [ -e "$dest_dir/00-tboot-trigger-probe.actions.disabled-after-b21-validation"
 fi
 
 # nothing beyond publication moved
-shaeq /usr/local/sbin/tboot-sbloader-helper    1a411e850fe1b95c7f3f0d2c4674507dbfb6ef05fd2b0fdb0bf7d799cdd2f18f
-shaeq /usr/local/sbin/tboot-sbloader-posttrans 3ccef59c4d49e54d3e2f8ebff7775ec9ad407144b3bb87c15d2c24d2947df8e7
+shaeq /usr/local/sbin/tboot-sbloader-helper    b9df2534b1539355a3c040ee296611f5da629e76467fccfcd44f6ed56325690f
+shaeq /usr/local/sbin/tboot-sbloader-posttrans b8d9a04c30cd39ee3600fb3ff8f581d7cf284f7f4aa639f03cf0fd733e705f0c
 shaeq /var/lib/tboot-sbloader/sbloader-manifest.baseline 2547bd821f978b2a85a919a11d08b32c5062925a9da7fdcf8e1d8a6e7ab4cc5e
 shaeq /usr/lib/systemd/boot/efi/systemd-bootx64.efi "$SRC_EFI_SHA"
 dp2="$(/usr/local/sbin/tboot-sbloader-posttrans --debug-print 2>&1 || true)"
@@ -10016,11 +10064,11 @@ IFS=: read -r c1 c2 c3 c4 c5 <<<"$rule_line"
 [ "$c5" = "/usr/local/sbin/tboot-sbloader-posttrans" ] && ok "command=tboot-sbloader-posttrans"        || no "command=$c5"
 echo
 echo "---- 4. artifact integrity (B.4 + B.2 + UKI hook) ----"
-shachk /usr/local/sbin/tboot-sbloader-helper    1a411e850fe1b95c7f3f0d2c4674507dbfb6ef05fd2b0fdb0bf7d799cdd2f18f
-shachk /usr/local/sbin/tboot-sbloader-posttrans 3ccef59c4d49e54d3e2f8ebff7775ec9ad407144b3bb87c15d2c24d2947df8e7
-shachk /usr/local/sbin/tboot-dnf-posttrans      35ad8733f190483f1bd6d071d2aa7cb8b1549286f9040086182443c584473cdd
-shachk /usr/local/sbin/tboot-dnf-helper         4bef223925d3a2520e692403f0c0dd8a932770ec17136008a3d5f6f0b2620f4b
-shachk /etc/kernel/install.d/80-tpm2-sign.install a455444a54f5be265f822d85f4681cba8ed5365a4323c9008835022f3b8c502f
+shachk /usr/local/sbin/tboot-sbloader-helper    b9df2534b1539355a3c040ee296611f5da629e76467fccfcd44f6ed56325690f
+shachk /usr/local/sbin/tboot-sbloader-posttrans b8d9a04c30cd39ee3600fb3ff8f581d7cf284f7f4aa639f03cf0fd733e705f0c
+shachk /usr/local/sbin/tboot-dnf-posttrans      1e75110935a72fc9433c9b4bf5688d26bc6d3bd1e02f4388b5e1f32ff1e5cc05
+shachk /usr/local/sbin/tboot-dnf-helper         937afc7a0d199bf7b7d1a5f5bcccf45c37c0f4f7dd0ad924b2567c4da7125e44
+shachk /etc/kernel/install.d/80-tpm2-sign.install 5857e51d5551e05a7ca384f71529ec2fef07f5a6dbe40df70c6bbe49d720947e
 shachk /etc/dnf/libdnf5-plugins/actions.d/50-tboot-posttrans.actions dfbffe56fa95f4e0231569bb3a1aabc8952b9f99c9d290e4f8fb1005ef90d798
 echo
 echo "---- 5. baseline still non-converged ----"
@@ -10065,12 +10113,12 @@ if [ -n "$pconf" ]; then
   info "actions plugin conf: $pconf"
   sed 's/^/        /' "$pconf"
   if grep -Eqi '^[[:space:]]*enabled[[:space:]]*=[[:space:]]*(0|false|no)\b' "$pconf"; then
-    no "actions plugin appears DISABLED in $pconf — first-fire would not trigger"
+    no "actions plugin appears DISABLED in $pconf: first-fire would not trigger"
   else
     ok "actions plugin not explicitly disabled"
   fi
 else
-  info "no explicit actions.conf found — plugin likely enabled by default on Fedora 43 (decide with ChatGPT before Gate 3)"
+  info "no explicit actions.conf found; confirm the Fedora 43 plugin default before Gate 3"
 fi
 echo
 echo "===== SUMMARY ====="
@@ -10086,7 +10134,7 @@ EOF
 Gate 3 is preceded by the pre-first-fire snapshot on host pve-host (`module5-b5-pre-firstfire`, after confirming thin-pool Data% < 75% and `qm status 500` running).
 
 ```bash
-# --- GATE 3 (VM 500): controlled first-fire — dnf reinstall systemd-boot-unsigned ---
+# --- GATE 3 (VM 500): controlled first-fire: dnf reinstall systemd-boot-unsigned ---
 # State-changing. set -uo pipefail (NOT -e): must keep collecting logs/state even if DNF fails.
 bash <<'EOF'
 set -uo pipefail   # NOT -e: must keep collecting logs/state even if DNF fails
@@ -10118,15 +10166,15 @@ gd(){ printf 'GUARD-FAIL: %s\n' "$1" >&2; g=$((g+1)); }
 shaeq(){ [ -e "$1" ] && [ "$(shaof "$1")" = "$2" ] || gd "$3"; }
 
 # B.4 chain
-shaeq /usr/local/sbin/tboot-sbloader-posttrans 3ccef59c4d49e54d3e2f8ebff7775ec9ad407144b3bb87c15d2c24d2947df8e7 "decider SHA drift"
-shaeq /usr/local/sbin/tboot-sbloader-helper    1a411e850fe1b95c7f3f0d2c4674507dbfb6ef05fd2b0fdb0bf7d799cdd2f18f "helper SHA drift"
+shaeq /usr/local/sbin/tboot-sbloader-posttrans b8d9a04c30cd39ee3600fb3ff8f581d7cf284f7f4aa639f03cf0fd733e705f0c "decider SHA drift"
+shaeq /usr/local/sbin/tboot-sbloader-helper    b9df2534b1539355a3c040ee296611f5da629e76467fccfcd44f6ed56325690f "helper SHA drift"
 shaeq /var/lib/tboot-sbloader/sbloader-manifest.baseline 2547bd821f978b2a85a919a11d08b32c5062925a9da7fdcf8e1d8a6e7ab4cc5e "baseline SHA drift"
 shaeq /etc/dnf/libdnf5-plugins/actions.d/60-tboot-sbloader.actions 2e83fcfcd237359d02a831cb381d40ca221d319108d66c264b847956c0418274 "60-rule SHA drift"
 # B.2 chain + UKI hook (must be untouched)
 shaeq /etc/dnf/libdnf5-plugins/actions.d/50-tboot-posttrans.actions dfbffe56fa95f4e0231569bb3a1aabc8952b9f99c9d290e4f8fb1005ef90d798 "50-rule SHA drift"
-shaeq /usr/local/sbin/tboot-dnf-posttrans 35ad8733f190483f1bd6d071d2aa7cb8b1549286f9040086182443c584473cdd "B.2 decider SHA drift"
-shaeq /usr/local/sbin/tboot-dnf-helper    4bef223925d3a2520e692403f0c0dd8a932770ec17136008a3d5f6f0b2620f4b "B.2 helper SHA drift"
-shaeq /etc/kernel/install.d/80-tpm2-sign.install a455444a54f5be265f822d85f4681cba8ed5365a4323c9008835022f3b8c502f "80-tpm2-sign hook SHA drift"
+shaeq /usr/local/sbin/tboot-dnf-posttrans 1e75110935a72fc9433c9b4bf5688d26bc6d3bd1e02f4388b5e1f32ff1e5cc05 "B.2 decider SHA drift"
+shaeq /usr/local/sbin/tboot-dnf-helper    937afc7a0d199bf7b7d1a5f5bcccf45c37c0f4f7dd0ad924b2567c4da7125e44 "B.2 helper SHA drift"
+shaeq /etc/kernel/install.d/80-tpm2-sign.install 5857e51d5551e05a7ca384f71529ec2fef07f5a6dbe40df70c6bbe49d720947e "80-tpm2-sign hook SHA drift"
 # source .efi unchanged
 shaeq /usr/lib/systemd/boot/efi/systemd-bootx64.efi "$SRC_EFI_SHA" "source .efi SHA drift"
 # armed + clean + non-converged
@@ -10229,14 +10277,14 @@ if [ "$unsafe" -eq 0 ]; then
   echo "GATE 3 RESULT: transaction completed; continue to Gate 4 validation"
   exit 0
 else
-  echo "GATE 3 RESULT: FAILED/UNSAFE — do not reboot"
+  echo "GATE 3 RESULT: FAILED/UNSAFE: do not reboot"
   exit 1
 fi
 EOF
 ```
 
 ```bash
-# --- GATE 4 (VM 500): convergence proof — B.4 systemd-boot + B.2/UKI re-convergence (read-only) ---
+# --- GATE 4 (VM 500): convergence proof: B.4 systemd-boot + B.2/UKI re-convergence (read-only) ---
 # A3 uses the dual-form decider-decision matcher (numeric `equal=N shape=N` on drift, worded on converge).
 bash <<'EOF'
 fail=0
@@ -10281,11 +10329,11 @@ MID="$(cat /etc/machine-id 2>/dev/null)"; KVER="$(uname -r)"
 EXP_UKI="/boot/efi/EFI/Linux/${MID}-${KVER}.efi"
 EXP_TOKEN="${MID}-${KVER}"
 
-echo "===== GATE 4: convergence proof — B.4 systemd-boot + B.2/UKI re-convergence (read-only) ====="
+echo "===== GATE 4: convergence proof: B.4 systemd-boot + B.2/UKI re-convergence (read-only) ====="
 echo "utc=$(date -u +%FT%TZ)  host=$(hostname)  MID=${MID}  KVER=${KVER}"
 echo
 
-echo "######## PART A — B.4 systemd-boot convergence (ASSERT) ########"
+echo "######## PART A: B.4 systemd-boot convergence (ASSERT) ########"
 echo
 echo "---- A1. .efi.signed integrity ----"
 present "$SIGNED"; assert_sha "$SIGNED" "$SIGNED_SHA"; signer1 "$SIGNED"; sbv_db "$SIGNED"
@@ -10333,7 +10381,7 @@ present "$B4_DIR/helper-last-success"
 absent "$B4_DIR/UNSAFE-TO-REBOOT"; absent "$B4_DIR/last-error"; absent "$B4_DIR/helper-last-error"
 echo
 
-echo "######## PART B — B.2 / UKI re-convergence (ASSERT) ########"
+echo "######## PART B: B.2 / UKI re-convergence (ASSERT) ########"
 echo
 echo "---- B1. B.2 decider state files ----"
 present "$B2_DEC/last-decision"
@@ -10353,9 +10401,9 @@ absent "$B2_HLP/last-failure"
 absent "$B2_HLP/last-failure.log"
 echo
 echo "---- B4. B.2 + UKI-hook chain SHAs unchanged ----"
-assert_sha /usr/local/sbin/tboot-dnf-posttrans 35ad8733f190483f1bd6d071d2aa7cb8b1549286f9040086182443c584473cdd
-assert_sha /usr/local/sbin/tboot-dnf-helper    4bef223925d3a2520e692403f0c0dd8a932770ec17136008a3d5f6f0b2620f4b
-assert_sha /etc/kernel/install.d/80-tpm2-sign.install a455444a54f5be265f822d85f4681cba8ed5365a4323c9008835022f3b8c502f
+assert_sha /usr/local/sbin/tboot-dnf-posttrans 1e75110935a72fc9433c9b4bf5688d26bc6d3bd1e02f4388b5e1f32ff1e5cc05
+assert_sha /usr/local/sbin/tboot-dnf-helper    937afc7a0d199bf7b7d1a5f5bcccf45c37c0f4f7dd0ad924b2567c4da7125e44
+assert_sha /etc/kernel/install.d/80-tpm2-sign.install 5857e51d5551e05a7ca384f71529ec2fef07f5a6dbe40df70c6bbe49d720947e
 assert_sha /etc/dnf/libdnf5-plugins/actions.d/50-tboot-posttrans.actions dfbffe56fa95f4e0231569bb3a1aabc8952b9f99c9d290e4f8fb1005ef90d798
 assert_sha /etc/dnf/libdnf5-plugins/actions.d/60-tboot-sbloader.actions 2e83fcfcd237359d02a831cb381d40ca221d319108d66c264b847956c0418274
 echo
@@ -10380,7 +10428,7 @@ has_section .pcrsig  "$EXP_UKI"
 vma_sane "$EXP_UKI"
 echo
 
-echo "######## PART C — RE-PIN (advanced during Gate 3; record for ratification) ########"
+echo "######## PART C: RE-PIN (advanced during Gate 3; record for ratification) ########"
 echo
 echo "---- C1. NEW B.2 baseline + last-computed (post-Gate-3) ----"
 info "RE-PIN  B.2 baseline  sha=$(shaof "$B2_DEC/boot-input-manifest.baseline")  size=$(stat -c '%s' "$B2_DEC/boot-input-manifest.baseline" 2>/dev/null)B"
@@ -10406,7 +10454,7 @@ echo
 
 echo "===== SUMMARY ====="
 if [ "$fail" -eq 0 ]; then
-  echo "GATE 4 RESULT: ALL ASSERTIONS PASSED — B.4 converged (signed+propagated) AND B.2/UKI re-converged (loadable, forward-sealable, PCR11 stable). RE-PIN values pending ChatGPT ratification."
+  echo "GATE 4 RESULT: ALL ASSERTIONS PASSED. B.4 converged (signed+propagated) AND B.2/UKI re-converged (loadable, forward-sealable, PCR11 stable). Record the RE-PIN values in the validation ledger."
 else
   echo "GATE 4 RESULT: ${fail} CHECK(S) FAILED"
   exit 1
@@ -10540,15 +10588,15 @@ assert_sha "$ACT/60-tboot-sbloader.actions"  2e83fcfcd237359d02a831cb381d40ca221
 echo
 
 echo "---- 8. chain SHAs stable ----"
-assert_sha /usr/local/sbin/tboot-sbloader-posttrans 3ccef59c4d49e54d3e2f8ebff7775ec9ad407144b3bb87c15d2c24d2947df8e7
-assert_sha /usr/local/sbin/tboot-sbloader-helper    1a411e850fe1b95c7f3f0d2c4674507dbfb6ef05fd2b0fdb0bf7d799cdd2f18f
-assert_sha /usr/local/sbin/tboot-dnf-posttrans      35ad8733f190483f1bd6d071d2aa7cb8b1549286f9040086182443c584473cdd
-assert_sha /usr/local/sbin/tboot-dnf-helper         4bef223925d3a2520e692403f0c0dd8a932770ec17136008a3d5f6f0b2620f4b
-assert_sha /etc/kernel/install.d/80-tpm2-sign.install a455444a54f5be265f822d85f4681cba8ed5365a4323c9008835022f3b8c502f
+assert_sha /usr/local/sbin/tboot-sbloader-posttrans b8d9a04c30cd39ee3600fb3ff8f581d7cf284f7f4aa639f03cf0fd733e705f0c
+assert_sha /usr/local/sbin/tboot-sbloader-helper    b9df2534b1539355a3c040ee296611f5da629e76467fccfcd44f6ed56325690f
+assert_sha /usr/local/sbin/tboot-dnf-posttrans      1e75110935a72fc9433c9b4bf5688d26bc6d3bd1e02f4388b5e1f32ff1e5cc05
+assert_sha /usr/local/sbin/tboot-dnf-helper         937afc7a0d199bf7b7d1a5f5bcccf45c37c0f4f7dd0ad924b2567c4da7125e44
+assert_sha /etc/kernel/install.d/80-tpm2-sign.install 5857e51d5551e05a7ca384f71529ec2fef07f5a6dbe40df70c6bbe49d720947e
 echo
 
 echo "===== SUMMARY ====="
-[ "$fail" -eq 0 ] && echo "GATE 6b RESULT: ALL PASSED — reboot-validated; TPM2 LUKS unlock (no passphrase), Secure Boot, both chains converged" || { echo "GATE 6b RESULT: ${fail} CHECK(S) FAILED"; exit 1; }
+[ "$fail" -eq 0 ] && echo "GATE 6b RESULT: ALL PASSED: reboot-validated; TPM2 LUKS unlock (no passphrase), Secure Boot, both chains converged" || { echo "GATE 6b RESULT: ${fail} CHECK(S) FAILED"; exit 1; }
 EOF
 ```
 
@@ -10562,20 +10610,20 @@ qm snapshot 500 module5-b5-validated --description "B.5 validated: B.4 systemd-b
 
 | Gate | Expected result |
 |---|---|
-| 0 | ALL CHECKS PASSED — armed-state preconditions intact; decider reports `drift (equal=1 shape=0)` against the non-converged baseline. |
+| 0 | ALL CHECKS PASSED: armed-state preconditions intact; decider reports `drift (equal=1 shape=0)` against the non-converged baseline. |
 | 1 | `guard: ALL PASS`; `published: …/60-tboot-sbloader.actions`; 5-field parse correct; active set = `50-` + `60-`; `GATE 1 DONE: ARMED`. |
 | 2 | ALL CHECKS PASSED; `actions.conf` shows `enabled = 1`. |
 | 3 | `rc=0`. Two-chain co-fire in the tee'd log: B.2 (`tboot-dnf-posttrans`/`tboot-dnf-helper`) drift → rebuild both kernels → `FINAL_PCR11=28E66CE2…C90F` → baseline updated → sentinel cleared; then B.4 (`tboot-sbloader-posttrans drift: equal=1 shape=0`) → helper `signed … (4859f48a…)`, `verify-signed OK … signer_count=1`, `checkpoint PASS … BOTH targets`, `propagated: bootctl --no-variables install`, `verify-esp OK`, `SUCCESS`; decider `helper-success: baseline advanced, converged, sentinel cleared`. End state: `.efi.signed` exists, `last-decision=helper-success`, sentinel absent, `helper-last-success.signed_sha=4859f48a…`; verdict `transaction completed; continue to Gate 4 validation`. |
-| 4 | ALL ASSERTIONS PASSED — decision-line `unchanged (manifest==baseline AND converged-shape)`; B.4 `.efi.signed` + both ESP loaders == `4859f48a…`; B.2 `last-computed-manifest` == baseline (`47903d22…`); PCR 11 stable; booted UKI `1187c78c…` VMA-sane. Part C records the RE-PIN values. |
+| 4 | ALL ASSERTIONS PASSED: decision-line `unchanged (manifest==baseline AND converged-shape)`; B.4 `.efi.signed` + both ESP loaders == `4859f48a…`; B.2 `last-computed-manifest` == baseline (`47903d22…`); PCR 11 stable; booted UKI `1187c78c…` VMA-sane. Part C records the RE-PIN values. |
 | 5 | Snapshot `module5-b5-pre-reboot` created. |
 | 6a | Clean boot, no LUKS passphrase prompt (operator-attested at the Proxmox console). |
-| 6b | ALL PASSED — runtime PCR 11 = `28E66CE2…C90F`; `tpm2-device=auto` + systemd-tpm2 token + keyslot-0 fallback; Secure Boot enabled (user); Measured UKI yes; Current = Default = MID-prefixed UKI (sha `1187c78c…`); loaders `4859f48a…` survived the reboot byte-identical; both chains converged. |
+| 6b | ALL PASSED: runtime PCR 11 = `28E66CE2…C90F`; `tpm2-device=auto` + systemd-tpm2 token + keyslot-0 fallback; Secure Boot enabled (user); Measured UKI yes; Current = Default = MID-prefixed UKI (sha `1187c78c…`); loaders `4859f48a…` survived the reboot byte-identical; both chains converged. |
 | 7 | Snapshot `module5-b5-validated` created (B.5 closure anchor). |
 
 ### Stop condition
 
-- **Gate 3 `rc != 0`, sentinel present, or `helper-last-error`/`last-error` present:** the verdict prints `FAILED/UNSAFE — do not reboot`. Do not proceed to Gate 5/6. Inspect the tee'd transaction log and the bounded per-tag journals under `/root/tboot-lab/artifacts/`, then route to ChatGPT. Roll back to `module5-b5-pre-firstfire` if the ESP or state is left in an unrecoverable shape.
-- **Gate 4 A3 decision-line still `drift`:** convergence did not complete — the B.4 helper signed/propagated but the decider did not advance the baseline to converged shape. Halt; do not reboot. (A bare `equal=1 shape=1` numeric form is NOT produced on the converged path; the worded `unchanged (… converged-shape)` form is correct — `06F` O.1.)
+- **Gate 3 `rc != 0`, sentinel present, or `helper-last-error`/`last-error` present:** the verdict prints `FAILED/UNSAFE: do not reboot`. Do not proceed to Gate 5/6. Inspect the tee'd transaction log and the bounded per-tag journals under `/root/tboot-lab/artifacts/`, then follow the evidence to the first unsuccessful stage. Roll back to `module5-b5-pre-firstfire` if the ESP or state is left in an unrecoverable shape.
+- **Gate 4 A3 decision-line still `drift`:** convergence did not complete: the B.4 helper signed/propagated but the decider did not advance the baseline to converged shape. Halt; do not reboot. (A bare `equal=1 shape=1` numeric form is NOT produced on the converged path; the worded `unchanged (… converged-shape)` form is correct: `06F` O.1.)
 - **Gate 6b runtime PCR 11 != `28E66CE2…C90F`, a passphrase prompt appeared, or Secure Boot not enabled:** the boot chain did not validate. The keyslot-0 passphrase remains the fallback (fail-safe, not a brick). Roll back to `module5-b5-pre-reboot` and triage.
 - **Any `qm snapshot` fails (Gate 5 / Gate 7):** Proxmox-host issue (thin-pool Data% ≥ 75%, name collision, parent missing). Triage on host pve-host.
 
@@ -10593,7 +10641,7 @@ These values are stable across rebuilds (modulo current-rebuild specifics like m
 
 | Invariant | Value |
 |---|---|
-| Validated hook source sha256 | `a455444a54f5be265f822d85f4681cba8ed5365a4323c9008835022f3b8c502f` |
+| Validated hook source sha256 | `5857e51d5551e05a7ca384f71529ec2fef07f5a6dbe40df70c6bbe49d720947e` |
 | Hook canonical path | `/etc/kernel/install.d/80-tpm2-sign.install` |
 | Hook mode | `0755` |
 | systemd-measure binary path | `/usr/lib/systemd/systemd-measure` |
@@ -10602,19 +10650,19 @@ These values are stable across rebuilds (modulo current-rebuild specifics like m
 | ESP UKI path (kernel-install-produced) | `/boot/efi/EFI/Linux/${MID}-${KVER}.efi` |
 | ESP UKI path (Phase 1 manual fallback) | `/boot/efi/EFI/Linux/${KVER}.efi` |
 | B.2.2 helper canonical path | `/usr/local/sbin/tboot-dnf-helper` |
-| B.2.2 helper source sha256 | `4bef223925d3a2520e692403f0c0dd8a932770ec17136008a3d5f6f0b2620f4b` |
-| B.2.2 helper version | `0.1.0-draft-B.2.2-pre-validation` |
+| B.2.2 helper source sha256 | `937afc7a0d199bf7b7d1a5f5bcccf45c37c0f4f7dd0ad924b2567c4da7125e44` |
+| B.2.2 helper version | `1.0.0` |
 | B.2.2 helper journal tag | `tboot-dnf-helper` |
 | B.2.2 predict sibling canonical path | `/usr/local/sbin/tboot-predict-pcr11` |
-| B.2.2 predict sibling source sha256 | `2d4985fa27726efff50bd91ba33ed1dd6e516fe2dd7350a48c73369b61aff160` |
+| B.2.2 predict sibling source sha256 | `b729ec271dd76cd8b4581f16c86e50fc28b947f2a1de5a7e16c6d5828591e3de` |
 | B.2.2 helper state directory | `/var/lib/tboot-dnf-helper` (root:root 0700) |
 | B.2.2 helper lock path | `/run/tboot-dnf-helper.lock` |
 | B.2.3 decider canonical path | `/usr/local/sbin/tboot-dnf-posttrans` (installed) |
 | B.2.3 decider resolved real path (Fedora 43 UsrMerge) | `/usr/local/bin/tboot-dnf-posttrans` (`/usr/local/sbin` is a relative symlink to `bin`; see `06F` I.3) |
-| B.2.3 decider sha256 (installed; identical to Gate 2 staged) | `35ad8733f190483f1bd6d071d2aa7cb8b1549286f9040086182443c584473cdd` |
-| B.2.3 decider mode + owner + size | mode 0755, owner root:root, size 34927 bytes |
-| B.2.3 decider staged path (Gate 2 reference) | `/tmp/tboot-dnf-posttrans.staged` (volatile; sha `35ad8733f190483f1bd6d071d2aa7cb8b1549286f9040086182443c584473cdd`, mode 0644) |
-| B.2.3 decider version | `0.1.0-draft-B.2.3-pre-validation` |
+| B.2.3 decider sha256 (installed; identical to Gate 2 staged) | `1e75110935a72fc9433c9b4bf5688d26bc6d3bd1e02f4388b5e1f32ff1e5cc05` |
+| B.2.3 decider mode + owner + size | mode 0755, owner root:root, size 35164 bytes |
+| B.2.3 decider staged path (Gate 2 reference) | `/tmp/tboot-dnf-posttrans.staged` (volatile; sha `1e75110935a72fc9433c9b4bf5688d26bc6d3bd1e02f4388b5e1f32ff1e5cc05`, mode 0644) |
+| B.2.3 decider version | `1.0.0` |
 | B.2.3 decider lock path | `/run/tboot-dnf-posttrans.lock` (acquired only by `_mode_normal`; absent in `--prime`, `--debug-print`, `--self-test`) |
 | B.2.3 decider state directory | `/var/lib/tboot-dnf-posttrans` (mode 0700 root:root; 3 entries at Gate 3 close) |
 | B.2.3 decider baseline file | `/var/lib/tboot-dnf-posttrans/boot-input-manifest.baseline` (mode 0600 root:root; 157 records across 14 manifest categories) |
@@ -10664,7 +10712,7 @@ Per-step halt/triage table. Each row says what to do or where to roll back.
 | Step 30 post-reboot PCR 11 mismatch (exit 84) | Measured-content chain drifted between predict and runtime. Rollback to `module5-b2-2-pre-real-run` and investigate dracut-output non-determinism in the regeneration. |
 | Step 31 Step 6 fails on `cryptsetup` at `08-cryptsetup-tooling` (or similar hyphenated category label) | External audit harness uses outdated `\<TOKEN\>` GNU awk word-boundary form. Replace the harness regex with the Deviation D form `(^|[^A-Za-z0-9_-])TOKEN($|[^A-Za-z0-9_-])` (matches the in-script `_self_test_trust_boundary`) and re-run Step 6 only. **Do not patch the staged source.** See `06F` H.4. |
 | Step 31 Step 7 invariant FAIL (exits 21–28) | Severe: Gate 2 was supposed to be non-mutating but a mutation surface has moved (decider installed, decider state-dir created, sentinel written, `.actions` file appeared, helper/hook drift, plugin-level `enabled` changed). Stop. Write the failure into `/root/tboot-lab/notes/b2-3-gate-2-attempts.md`. Consider whether rollback to `module5-b2-2-real-run-validated` is required before any further work. |
-| Step 32 sub-gate 3.0 FAIL | VM not in B.2.2 closure state. Halt; do not proceed. Investigate which invariant moved (kernel, UKI sha, bootctl entries, PCR 11, frozen artefact shas, negative pre-conditions). Most common: `qm listsnapshot` parsing — apply the tree-prefix-tolerant awk (`06F` I.1). Second most common: `bootctl get-default` returns empty on this Fedora 43 VM — parse `bootctl status` instead (`06F` I.2). |
+| Step 32 sub-gate 3.0 FAIL | VM not in B.2.2 closure state. Halt; do not proceed. Investigate which invariant moved (kernel, UKI sha, bootctl entries, PCR 11, frozen artefact shas, negative pre-conditions). Most common: `qm listsnapshot` parsing: apply the tree-prefix-tolerant awk (`06F` I.1). Second most common: `bootctl get-default` returns empty on this Fedora 43 VM: parse `bootctl status` instead (`06F` I.2). |
 | Step 32 sub-gate 3.1 FAIL (staged file missing or sha drift) | `/tmp` was wiped or the staged decider was overwritten. Re-run Step 31 (Gate 2) to re-stage. Do not bypass. |
 | Step 32 sub-gate 3.2 FAIL on UsrMerge resolution | `/usr/local/sbin` does not resolve to `/usr/local/bin` (Fedora 43 default). Lab layout has drifted from Fedora 43 defaults. Halt; investigate filesystem state before forcing the install. See `06F` I.3. |
 | Step 32 sub-gate 3.2 FAIL post-publish (sha drift on DST_REAL) | The atomic-publish window was disturbed. The trap will have cleaned the temp. Rollback to `module5-b2-2-real-run-validated`, then re-run sub-gates 3.0+. |
@@ -10675,7 +10723,7 @@ Per-step halt/triage table. Each row says what to do or where to roll back.
 | Step 32 sub-gate 3.6 FAIL (--prime rc!=0, baseline missing, err: in journal, sentinel appeared, state-dir count != 3) | The baseline prime did not complete cleanly. Halt. If state was partially written, rollback to `module5-b2-2-real-run-validated` and restart from sub-gate 3.0. **Do not** include a re-prime refusal probe in this gate (`06F` I.6). |
 | Step 32 sub-gate 3.7 FAIL on drift (--debug-print sha != baseline sha) | The decider is non-deterministic on steady state, OR a background process mutated a manifest input between Gate 3.6 and Gate 3.7. Severe; rollback to `module5-b2-2-real-run-validated` and investigate the manifest category that drifted (the `diff` head in the FAIL output identifies the category). |
 | Step 32 sub-gate 3.7 FAIL on rc capture returning 0 from a failed command | Harness used `output=$(CMD 2>&1 || true)` pattern. The `|| true` masked the failure. Switch to the subshell + tempfile pattern: `( CMD >out 2>err ; echo $? >rc_file )`. See `06F` I.7. |
-| Step 32 sub-gate 3.8 FAIL on `qm snapshot` | Proxmox-host issue (thin-pool full, name collision, parent missing). Triage on the host. The decider state on the VM is intact; the only missing artefact is the closure snapshot itself — which can be retried after triage. Do not declare Gate 3 closed until the snapshot exists. |
+| Step 32 sub-gate 3.8 FAIL on `qm snapshot` | Proxmox-host issue (thin-pool full, name collision, parent missing). Triage on the host. The decider state on the VM is intact; the only missing artefact is the closure snapshot itself, which can be retried after triage. Do not declare Gate 3 closed until the snapshot exists. |
 | Step 32 sub-gate 3.8 FAIL on VM status != running post-snapshot | The snapshot operation stopped the VM unexpectedly. Capture `qm status 500`, `journalctl -u pve*`. Restart the VM (`qm start 500`), verify boot-chain health (PCR 11 match, UKI boot OK), then re-evaluate snapshot trustworthiness. |
 | Step 33 Gate 4.1 staged-rule sha mismatch | Heredoc smart-quote substitution or trailing whitespace. Re-run Gate 4.1 from a clean shell; verify shell is not autocompleting/expanding the heredoc body. Expected sha is `dfbffe56fa95f4e0231569bb3a1aabc8952b9f99c9d290e4f8fb1005ef90d798`; expected size 87 bytes; expected mode/owner 0644 root:root. |
 | Step 33 Gate 4.2 deviation-D regex flags a forbidden token in the staged rule | Severe: the staged rule should be a single line containing only the design-locked shape. If a token from the forbidden list appears, the heredoc was corrupted. Restart from Gate 4.1 and re-stage. |
@@ -10686,34 +10734,34 @@ Per-step halt/triage table. Each row says what to do or where to roll back.
 | Step 33 Gate 6A FAIL on `Loaded libdnf plugin` not in `dnf5.log` | Harness bug, not a trigger failure. dnf5.log does not record plugin-load entries in this environment (`06F` J.1). The canonical Step 33 Gate 6A script does NOT assert this; if you encounter a derived verifier that does, remove the assertion and use `journalctl -t tboot-dnf-posttrans` evidence instead. |
 | Step 33 Gate 6A FAIL on lock-file presence after clean decider exit | Harness bug, not a runtime bug. `flock(1)` releases on fd close without unlinking the lock file (`06F` J.3). The canonical invariant is "not actively held", probed via non-blocking `flock <> -n` with symlink rejection. Replace any `[ ! -e "$DECIDER_LOCK" ]` invariant with the canonical probe in `06B` Step 33 Gate 6A. |
 | Step 33 Gate 6A FAIL on baseline sha drift on a no-drift transaction | Severe: the decider updated the baseline despite `decision=unchanged`. This contradicts the design (baseline updates only on helper success, never on no-drift). Capture state-dir contents, journal, `last-decision`, then rollback to `module5-b2-3-decider-installed-primed`. |
-| Step 33 Gate 6A FAIL on initramfs / UKI mtime advancement on a no-drift transaction | Severe: a kernel-install scriptlet fired during figlet install. This should be impossible — figlet is not a kernel-package and triggers no kernel-install hooks. Capture `journalctl -t kernel-install --since "$PRE_TIME_6A"` and the dnf transaction output, then rollback to `module5-b2-3-decider-installed-primed`. |
+| Step 33 Gate 6A FAIL on initramfs / UKI mtime advancement on a no-drift transaction | Severe: a kernel-install scriptlet fired during figlet install. This should be impossible: figlet is not a kernel-package and triggers no kernel-install hooks. Capture `journalctl -t kernel-install --since "$PRE_TIME_6A"` and the dnf transaction output, then rollback to `module5-b2-3-decider-installed-primed`. |
 | Step 33 Gate 6B FAIL with last-decision epoch not advanced past Gate 6A's epoch | Severe: the decider did not fire on the outbound (`dnf remove`) transaction, meaning empty `direction:` did not actually fire on outbound in this rule. This contradicts the libdnf5-plugin-actions 1.4.0 man page; investigate before declaring B.2.3 complete. |
 | Step 33 Gate 7 Phase 2 `qm snapshot` fails | Proxmox-host issue (thin-pool full, name collision with `module5-b2-3-validated`, parent missing). Triage on the host. VM state is intact; Gates 4–6B closure is preserved on disk. After triage, retry Phase 2 only; do not re-run earlier phases. |
 | Step 33 Gate 7 Phase 3 FAIL on PCR 11 drift post-snapshot | The Proxmox snapshot operation disturbed the VM's measured state. Capture `qm status 500`, `journalctl -u pve* --since '-5 min'` on the host; `uname -r`, `cat /sys/class/tpm/tpm0/pcr-sha256/11` on the VM. The snapshot may need to be treated as forensic-evidence-only and re-taken after a reboot stabilises the boot-chain measurement chain. |
-| Step 34 Gate 1 FAIL on Phase 1 invariant (decider/helper/predict/hook/prodrule sha drift, baseline sha drift, booted UKI sha drift, runtime or stored PCR 11 drift) | VM not at B.2.3 closure state. Rollback to `module5-b2-3-validated` and re-run Step 34 from Gate 1. If the drift is in the trust-chain script shas, investigate before rollback — a script may have been edited out-of-band. |
+| Step 34 Gate 1 FAIL on Phase 1 invariant (decider/helper/predict/hook/prodrule sha drift, baseline sha drift, booted UKI sha drift, runtime or stored PCR 11 drift) | VM not at B.2.3 closure state. Rollback to `module5-b2-3-validated` and re-run Step 34 from Gate 1. If the drift is in the trust-chain script shas, investigate before rollback: a script may have been edited out-of-band. |
 | Step 34 Gate 1 FAIL on `dracut-network already installed` (assertion 201) | The reference candidate is unavailable for this rebuild. Set `CANDIDATE` to one of `dracut-live`, `dracut-squash`, `dracut-tools-extra` and re-run Gate 1 from the top. All four candidates pass the Gate 1 selection criteria. |
-| Step 34 Gate 1 FAIL on `--assumeno` rc not 0 or 1 (assertion 300), missing refusal phrase (301), or decider fired in window (306) | DNF5 `--assumeno` did not produce a documented refusal shape. Capture `$ASSUMENO_OUT` and `journalctl -t tboot-dnf-posttrans --since "$PRE_ASSUMENO_TS" --until "$POST_ASSUMENO_TS"`. Most likely cause for rc!=0\|1: stale DNF metadata cache; refresh with `dnf makecache` and retry. For 306: decider unexpectedly fired during preview — investigate which DNF transaction actually committed. See `06F` K.2. |
+| Step 34 Gate 1 FAIL on `--assumeno` rc not 0 or 1 (assertion 300), missing refusal phrase (301), or decider fired in window (306) | DNF5 `--assumeno` did not produce a documented refusal shape. Capture `$ASSUMENO_OUT` and `journalctl -t tboot-dnf-posttrans --since "$PRE_ASSUMENO_TS" --until "$POST_ASSUMENO_TS"`. Most likely cause for rc!=0\|1: stale DNF metadata cache; refresh with `dnf makecache` and retry. For 306: decider unexpectedly fired during preview: investigate which DNF transaction actually committed. See `06F` K.2. |
 | Step 34 Gate 1 FAIL on transaction-preview sensitive package or unexpected dracut-* (assertions 304, 305) | Candidate is not safe for this rebuild. Do not proceed to Gate 3. Pick a different candidate, re-run Gate 1. |
-| Step 34 Gate 2 FAIL on `qm snapshot` | Proxmox-host issue (thin-pool full, name collision with `module5-b2-4-pre-drift-transaction`, parent missing). Triage on the host. VM state on VM 500 is intact. Do not proceed to Gate 3 — without the snapshot anchor, Gate 3 is uncovered. |
+| Step 34 Gate 2 FAIL on `qm snapshot` | Proxmox-host issue (thin-pool full, name collision with `module5-b2-4-pre-drift-transaction`, parent missing). Triage on the host. VM state on VM 500 is intact. Do not proceed to Gate 3: without the snapshot anchor, Gate 3 is uncovered. |
 | Step 34 Gate 2 FAIL on VM status != running post-snapshot | The snapshot operation stopped the VM unexpectedly. Capture `qm status 500`, `journalctl -u pve*` on the host. Restart VM (`qm start 500`), verify boot-chain health (PCR 11 match, UKI boot OK), then re-evaluate snapshot trustworthiness. Do not proceed to Gate 3 until VM is `status: running` and the snapshot is trustworthy. |
-| Step 34 Gate 3 FAIL on `dnf install` rc != 0 (assertion 200) | The DNF transaction itself failed. The production rule has `raise_error=1`, so a decider non-zero exit also surfaces here. Capture `$DNF_OUT`, `journalctl -t tboot-dnf-posttrans --since "$PRE_TS"`, `cat /var/lib/tboot-dnf-posttrans/last-error` (if present), `cat /var/lib/tboot-dnf-helper/last-failure` and `last-failure.log` (if present). If the helper sentinel is present (`/var/lib/tboot-dnf-helper/UNSAFE-TO-REBOOT`), the helper failed and the boot chain is in a known-unsafe state — rollback to `module5-b2-4-pre-drift-transaction`. |
+| Step 34 Gate 3 FAIL on `dnf install` rc != 0 (assertion 200) | The DNF transaction itself failed. The production rule has `raise_error=1`, so a decider non-zero exit also surfaces here. Capture `$DNF_OUT`, `journalctl -t tboot-dnf-posttrans --since "$PRE_TS"`, `cat /var/lib/tboot-dnf-posttrans/last-error` (if present), `cat /var/lib/tboot-dnf-helper/last-failure` and `last-failure.log` (if present). If the helper sentinel is present (`/var/lib/tboot-dnf-helper/UNSAFE-TO-REBOOT`), the helper failed and the boot chain is in a known-unsafe state: rollback to `module5-b2-4-pre-drift-transaction`. |
 | Step 34 Gate 3 FAIL 411 "helper production-mode start lines = 0" with the rest of the journal looking healthy | The rev-3 reference run hit this exact symptom. The mutation likely succeeded; the harness regex is wrong. **Do not roll back immediately.** Read the helper journal manually: `journalctl -t tboot-dnf-helper --since "$PRE_TS" --no-pager -o cat`. If the journal shows `info: starting version=… mode=production` followed by the full kernel-enumeration + dracut + kernel-install + 80-tpm2-sign flow ending in `helper exited 0`, the mutation succeeded and Gate 3 is recoverable via the post-hoc continuation verifier in `06F` K.1. If the helper journal does NOT show this pattern, rollback to `module5-b2-4-pre-drift-transaction` and investigate. |
-| Step 34 Gate 3 FAIL on decider journal evidence (401–407) | The decider did not behave as expected. Capture the full decider journal since `$PRE_TS`; capture `$LAST_DECISION`; if `$LAST_ERROR` exists, capture it. Most likely causes: decider crashed mid-run (rollback to `module5-b2-4-pre-drift-transaction`); decider logged unchanged on a drift transaction (severe — baseline-comparison logic is broken; rollback and investigate). |
+| Step 34 Gate 3 FAIL on decider journal evidence (401–407) | The decider did not behave as expected. Capture the full decider journal since `$PRE_TS`; capture `$LAST_DECISION`; if `$LAST_ERROR` exists, capture it. Most likely causes: decider crashed mid-run (rollback to `module5-b2-4-pre-drift-transaction`); decider logged unchanged on a drift transaction (severe: baseline-comparison logic is broken; rollback and investigate). |
 | Step 34 Gate 3 FAIL on helper journal evidence other than 411 (412–415) | Helper started but did not complete cleanly. If 412 (kernels enumerated != 2), check `/lib/modules/*/vmlinuz` enumeration; rollback if drift. If 415 (helper has errors), capture `/var/lib/tboot-dnf-helper/last-failure*` and rollback. |
-| Step 34 Gate 3 FAIL on 80-tpm2-sign hook count (421, 422) | Hook fired wrong number of times. If count = 0, hook is not installed at `/etc/kernel/install.d/80-tpm2-sign.install` or is non-executable — `06B` Step 14 invariants drifted; rollback. If count > 1, kernel-install was invoked more than once per kernel — investigate helper. |
-| Step 34 Gate 3 FAIL on state transitions (501–512) | The mutation completed but the decider did not advance state cleanly. 503 (last-decision != helper-success) with `last-decision=helper-pending` suggests the decider was killed between sentinel-write and helper-exit. 508 (sentinel remains): helper did not complete or decider did not clear sentinel — **do not reboot, system is in known-unsafe state**, rollback to `module5-b2-4-pre-drift-transaction`. 509 (last-error present): read the file; rollback. 511 (success marker predates PRE_EPOCH): the helper success marker is stale — the helper did not actually rewrite it on this transaction; severe, rollback. |
-| Step 34 Gate 3 FAIL on UKI evidence (601–606) | Either UKI did not advance (601 — helper claims success but UKI did not rebuild; severe), or sbverify failed (603, 606 — Secure Boot signing chain broken; severe). Rollback to `module5-b2-4-pre-drift-transaction`. |
+| Step 34 Gate 3 FAIL on 80-tpm2-sign hook count (421, 422) | Hook fired wrong number of times. If count = 0, hook is not installed at `/etc/kernel/install.d/80-tpm2-sign.install` or is non-executable: `06B` Step 14 invariants drifted; rollback. If count > 1, kernel-install was invoked more than once per kernel: investigate helper. |
+| Step 34 Gate 3 FAIL on state transitions (501–512) | The mutation completed but the decider did not advance state cleanly. 503 (last-decision != helper-success) with `last-decision=helper-pending` suggests the decider was killed between sentinel-write and helper-exit. 508 (sentinel remains): helper did not complete or decider did not clear sentinel: **do not reboot, system is in known-unsafe state**, rollback to `module5-b2-4-pre-drift-transaction`. 509 (last-error present): read the file; rollback. 511 (success marker predates PRE_EPOCH): the helper success marker is stale: the helper did not actually rewrite it on this transaction; severe, rollback. |
+| Step 34 Gate 3 FAIL on UKI evidence (601–606) | Either UKI did not advance (601: helper claims success but UKI did not rebuild; severe), or sbverify failed (603, 606: Secure Boot signing chain broken; severe). Rollback to `module5-b2-4-pre-drift-transaction`. |
 | Step 34 Gate 3 FAIL on runtime PCR 11 changed without reboot (608) | The TPM2 was extended out-of-band during the transaction. Should not happen. Capture `journalctl --since "$PRE_TS" --until "$POST_TS"` system-wide; the offending PCR-extending operation is in there. Rollback. |
-| Step 34 Gate 3 FAIL on trust-chain script sha drift (701–705) | A trust-chain script was mutated during the transaction. Severe — the decider or helper rewrote its own source, or a parallel process did. Capture all five script shas, capture the production rule sha, rollback to `module5-b2-4-pre-drift-transaction`, and investigate. |
-| Step 34 Gate 3 PCR 11 value did not advance (informational, not a FAIL) | `PCR 11 value PRE/POST` shows identical values. This is outcome (b) per `06F` K.3: helper-path-only closure. Not a failure — chain machinery is proven, but the value-tracking axis was not exercised by this candidate. Gates 4–6 will still pass; Gate 7 closure-criterion documents the closure path as (b) rather than (a). Consider re-running Gate 3 with a different candidate in a future cycle to exercise the strong-closure path. |
+| Step 34 Gate 3 FAIL on trust-chain script sha drift (701–705) | A trust-chain script was mutated during the transaction. Severe: the decider or helper rewrote its own source, or a parallel process did. Capture all five script shas, capture the production rule sha, rollback to `module5-b2-4-pre-drift-transaction`, and investigate. |
+| Step 34 Gate 3 PCR 11 value did not advance (informational, not a FAIL) | `PCR 11 value PRE/POST` shows identical values. This is outcome (b) per `06F` K.3: helper-path-only closure. Not a failure: chain machinery is proven, but the value-tracking axis was not exercised by this candidate. Gates 4–6 will still pass; Gate 7 closure-criterion documents the closure path as (b) rather than (a). Consider re-running Gate 3 with a different candidate in a future cycle to exercise the strong-closure path. |
 | Step 35 Gate 4 FAIL 200–211 (current UKI integrity broken) | UKI on ESP corrupted between Step 34 closure and Gate 4. Severe. Capture sha + sbverify + objdump output, rollback to `module5-b2-4-pre-drift-transaction`, re-run B.2.4 from Gate 3. |
 | Step 35 Gate 4 FAIL 400–404 (PCR 11 cross-validation broken) | Stored prediction ≠ independent prediction, or runtime PCR 11 advanced without reboot, or predictor errored. Capture `tboot-predict-pcr11` stdout/stderr, predictor sha, hook sha, current UKI sha. **Do not snapshot, do not reboot.** Rollback to `module5-b2-4-pre-drift-transaction`. |
 | Step 35 Gate 4 FAIL 110–142 (trust-chain or state drift since Step 34) | Something mutated decider/helper/hook/predict/production-rule or decider/helper state between Step 34 closure and Gate 4. Identify the mutating process via `journalctl --since` for the affected `mtime`; rollback to `module5-b2-4-pre-drift-transaction` if drift is unexplained. |
 | Step 35 Gate 5 snapshot fails | `qm snapshot` returned non-zero, or `qm listsnapshot 500` does not show `module5-b2-4-pre-reboot` with correct parent + `current` below. Triage on host pve-host (Proxmox storage Data% must be under 75% per `06_Lab_Setup_Runbook.md`). Do not declare Gate 5 closed; do not reboot. |
 | Step 36 Gate 6A pre-reboot probe FAIL | At least one invariant drifted between Gate 5 snapshot and the imminent reboot. Halt; do not issue `systemctl reboot`. Triage the specific assertion. If unrecoverable, rollback to `module5-b2-4-pre-reboot`. |
-| Step 36 Gate 6A LUKS passphrase prompt at boot | **Hard fail.** Do NOT type the passphrase as part of validation — that proves recovery works, not TPM auto-unlock. Two recovery paths: (1) recovery: type keyslot 0 passphrase to reach userspace, then investigate (read PCR 11 sysfs, journal `systemd-cryptsetup`, check `bootctl status`, verify UKI sha + sbverify); (2) rollback: power-cycle VM via Proxmox UI, then `qm rollback 500 module5-b2-4-pre-reboot` on host. Add a `06F` finding documenting the failure mode before re-attempting. |
+| Step 36 Gate 6A LUKS passphrase prompt at boot | **Hard fail.** Do NOT type the passphrase as part of validation: that proves recovery works, not TPM auto-unlock. Two recovery paths: (1) recovery: type keyslot 0 passphrase to reach userspace, then investigate (read PCR 11 sysfs, journal `systemd-cryptsetup`, check `bootctl status`, verify UKI sha + sbverify); (2) rollback: power-cycle VM via Proxmox UI, then `qm rollback 500 module5-b2-4-pre-reboot` on host. Add a `06F` finding documenting the failure mode before re-attempting. |
 | Step 36 Gate 6A firmware Secure Boot rejection / kernel panic | Capture Proxmox console screenshot. Power-cycle VM. Rollback to `module5-b2-4-pre-reboot`. Investigate the rebuilt UKI offline (sbverify, objdump section table, `.pcrpkey`/`.pcrsig` presence, VMA sanity per `06F` B.1). |
-| Step 36 Gate 6B FAIL 200–202 (runtime PCR 11 byte-match broken) | **Most severe failure mode** — the property the entire chain was built to prove. Boot succeeded, LUKS unlocked, but runtime PCR 11 != stored prediction. Capture full TPM PCR state via `tpm2_pcrread sha256:0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15` (read-only) before any rollback. Capture full firmware event log: `cat /sys/kernel/security/tpm0/binary_bios_measurements > /root/binary_bios_measurements_b2_4_gate6b_fail.bin` (read-only). Investigate the divergence: hook output, predictor algorithm, firmware-measured content. Rollback to `module5-b2-4-pre-reboot` after forensics capture. |
+| Step 36 Gate 6B FAIL 200–202 (runtime PCR 11 byte-match broken) | **Most severe failure mode**: the property the entire chain was built to prove. Boot succeeded, LUKS unlocked, but runtime PCR 11 != stored prediction. Capture full TPM PCR state via `tpm2_pcrread sha256:0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15` (read-only) before any rollback. Capture full firmware event log: `cat /sys/kernel/security/tpm0/binary_bios_measurements > /root/binary_bios_measurements_b2_4_gate6b_fail.bin` (read-only). Investigate the divergence: hook output, predictor algorithm, firmware-measured content. Rollback to `module5-b2-4-pre-reboot` after forensics capture. |
 | Step 36 Gate 6B FAIL 301–303 / 400 / 410–413 (boot-path or UKI-identity drift across reboot) | Severe. The firmware loaded something other than the validated UKI, or the UKI on the ESP mutated across the reboot transition. Rollback to `module5-b2-4-pre-reboot`. |
 | Step 36 Gate 6B FAIL 500–602 (decider/helper state changed across reboot) | State mutation across reboot transition that should not have happened. Identify which file changed; correlate with journal across the reboot window; rollback to `module5-b2-4-pre-reboot`. |
 | Step 36 Gate 6B FAIL 900–902 (post-reboot errors in decider/helper/hook journals) | The decider, helper, or 80-tpm2-sign hook is firing post-reboot when it should be quiet. Capture journal contents; do not snapshot Gate 7; investigate before further work. |
@@ -10723,8 +10771,8 @@ Per-step halt/triage table. Each row says what to do or where to roll back.
 | Step 37 Gate 7 audit reveals an EXPECTED UKI failing sbverify, missing `.pcrpkey`/`.pcrsig`, or with anomalous VMA | The validated MID-prefixed UKIs must remain firmware-loadable and structurally sound. Severe. Rollback to `module5-b2-4-pre-reboot`. |
 | Step 38 prime/mask fails (state-dir wrong mode, mask not applied) | Chain not installed cleanly. Do not publish the `60-` rule. Rollback to `module5-b4-pre-install-publish` (deeper: `module5-b4-pre-design-verification`). |
 | Step 38 Step 0/8 `qm snapshot` fails | Proxmox-host issue (thin-pool Data% ≥ 75%, name collision, parent missing). Triage on host pve-host. Without the Step 8 closure snapshot `module5-b4-installed`, do not begin B.5. |
-| Step 39 Gate 3 `rc != 0`, sentinel present, or `helper-last-error`/`last-error` present | Verdict prints `FAILED/UNSAFE — do not reboot`. Do not proceed to Gate 5/6. Inspect the tee'd transaction log and bounded per-tag journals under `/root/tboot-lab/artifacts/`. Roll back to `module5-b5-pre-firstfire` if the ESP or state is left unrecoverable. |
-| Step 39 Gate 4 decision-line still `drift` | Convergence did not complete: B.4 helper signed/propagated but the decider did not advance the baseline to converged shape. Halt; do not reboot. (A bare `equal=1 shape=1` numeric form is NOT produced on the converged path; the worded `unchanged (… converged-shape)` form is correct — `06F` O.1.) |
+| Step 39 Gate 3 `rc != 0`, sentinel present, or `helper-last-error`/`last-error` present | Verdict prints `FAILED/UNSAFE: do not reboot`. Do not proceed to Gate 5/6. Inspect the tee'd transaction log and bounded per-tag journals under `/root/tboot-lab/artifacts/`. Roll back to `module5-b5-pre-firstfire` if the ESP or state is left unrecoverable. |
+| Step 39 Gate 4 decision-line still `drift` | Convergence did not complete: B.4 helper signed/propagated but the decider did not advance the baseline to converged shape. Halt; do not reboot. (A bare `equal=1 shape=1` numeric form is NOT produced on the converged path; the worded `unchanged (… converged-shape)` form is correct: `06F` O.1.) |
 | Step 39 Gate 6b runtime PCR 11 != `28E66CE2…C90F`, passphrase prompt appears, or Secure Boot not enabled | Boot chain did not validate. The keyslot-0 passphrase remains the fallback (fail-safe, not a brick). Roll back to `module5-b5-pre-reboot` and triage. |
 | Step 39 Gate 5/7 `qm snapshot` fails | Proxmox-host issue (thin-pool Data% ≥ 75%, name collision, parent missing). Triage on host pve-host. |
 | Total VM corruption | Rollback to most recent good snapshot from `qm listsnapshot 500`. The lineage in `00_Current_Project_State.md` shows valid targets. |

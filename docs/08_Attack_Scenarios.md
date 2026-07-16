@@ -39,11 +39,16 @@ After entering the passphrase (keyslot 0) the system started normally. After
 re-enabling Secure Boot, PCR 7 returned to the baseline and the TPM unlocked
 again without a passphrase prompt.
 
-**A2. Tampering with the UKI between signing and boot.**
-Attack: the signed UKI is modified after signing. Defense: the UEFI firmware
-rejects the file at `LoadImage()`. Evidence status: **captured**. See
-`09_Forensic_Artifact_objcopy_UKI.md`: a UKI corrupted via `objcopy` passed the
-Linux-side checks but was rejected by the firmware with:
+**A2. Firmware rejection of a malformed but signed UKI.**
+Test: `objcopy` added a section using a layout that produced invalid PE/COFF
+section addresses. The resulting file was then signed with `sbsign`. Linux-side
+signature checks passed, but the UEFI firmware rejected it at `LoadImage()`.
+Evidence status: **captured**. See `09_Forensic_Artifact_objcopy_UKI.md`.
+
+This test demonstrates that a valid Authenticode signature does not guarantee
+that firmware can load a structurally malformed image. It is not evidence of a
+post-signing tamper test; changing the signed bytes after `sbsign` would instead
+invalidate the Authenticode signature.
 
 ```text
 Error loading EFI binary \EFI\Linux\<id>.efi: Load Error
@@ -57,29 +62,34 @@ run with captured output was not recovered.
 
 ## B. Automation layer (fail-closed chains)
 
-**B1. Corruption of the helper sha.**
-Attack: the helper script is modified. Defense: the install gate compares the
-sha and refuses to deploy. Evidence status: **mechanism** (B.4 install logic,
-exercised during the gates).
+**B1. Corruption of a staged helper.**
+Attack: a helper is modified before installation. Defense: the installation
+gate compares the staged sha256 with the reviewed value and refuses to deploy a
+mismatch. Evidence status: **mechanism** (exercised during installation).
+
+This check does not provide continuous runtime integrity. A helper modified
+after installation is executed by path unless another host-integrity control
+detects it. No such monitoring service is shipped in this repository.
 
 **B2. Mutation of the signing hook.**
 Attack: the `kernel-install` hook is modified. Defense: the helper's preflight
 refuses to run. Evidence status: **mechanism**.
 
 **B3. Tampering with the production `.actions` line.**
-Attack: the line that invokes the decider is modified or removed. Defense: the
-decider is no longer invoked; the resulting mtime and sha drift is detectable by
-the Module 4 monitoring. Evidence status: **mechanism**.
+Attack: the line that invokes the decider is modified or removed. Result: the
+decider may no longer run. The repository provides install-time hashes and
+audit commands, but it does not ship continuous monitoring for the installed
+action file. Evidence status: **residual risk**.
 
-**B4. Bypassing drift detection (out-of-band baseline write).**
-Attack: the attacker writes the baseline outside the chain to bypass drift
-detection. Defense: the chain produces and validates the new runtime PCR 11
-byte-for-byte after a real reboot under the helper-driven update workflow.
-Evidence status: **captured**. Citable evidence from B.2.4: Gate 3 (reference
-run), Gate 4 (independent prediction, byte match), Gate 6A (operator-confirmed
-clean reboot) and Gate 6B (runtime PCR 11 byte match). Additional taxonomy: the
-(a)/(b)/(c)/(d) outcomes from finding K.3 and the FAIL 411 →
-continuation-verifier closure path from K.1 (`06F_Diagnostic_Findings_Catalog.md`).
+**B4. Out-of-band baseline modification.**
+Attack: a privileged process writes a new baseline outside the decider flow and
+causes later drift to appear authorised. The normal reboot validation proves
+that a legitimate helper-driven update converged, but it does not prevent or
+detect a privileged baseline rewrite. The B.2 state directory rejects symlinks
+and requires root ownership with mode 0700. The B.4 chain now applies the same
+checks. These controls reduce accidental and unprivileged modification; they do
+not protect against a compromised root account. Evidence status: **residual
+risk**.
 
 ## C. Residual risk
 
@@ -109,9 +119,10 @@ Evidence status: **future / deployment-dependent**.
 - **A3 (pubkey replacement):** the mechanism is demonstrated, but a standalone
   tamper run with captured console output has not been executed. A1 (PCR 7
   tamper) has since been captured (see above).
-- **B1, B2, B3:** the fail-closed guarantees follow from the chain logic and
-  were exercised during the gates; standalone per-scenario tamper output was
-  not captured as a separate block.
+- **B1, B2:** the install-time and preflight mechanisms were exercised during
+  the gates; standalone tamper output was not captured as a separate block.
+- **B3, B4:** continuous action-file monitoring and protection against a
+  compromised root account are outside the shipped implementation.
 - **D1 (external command-line inputs):** not applicable to the validated
   configuration; future testing applies only to deployments that deliberately
   permit external PCR 12 inputs.

@@ -9,11 +9,14 @@ module: 2
 status: stable
 ---
 
-# Module 2 — Secure OS Updates with Forward Sealing
+# Module 2: Secure OS Updates with Forward Sealing
 
 ## Purpose of This Module
 
-Module 1 established that the TPM records a cryptographic fingerprint of what booted. This module addresses the problem that fingerprint changes with every OS update — and explains how to authorize future system states without requiring manual re-enrollment of the LUKS volume after each update.
+Module 1 established that the TPM records a cryptographic fingerprint of what
+booted. This module explains how to authorise future measured states when an OS
+update changes the contents of the UKI, without re-enrolling the LUKS volume
+after each update.
 
 > [!NOTE]
 > **Module 2 in One Line**
@@ -27,7 +30,7 @@ Module 1 established that the TPM records a cryptographic fingerprint of what bo
 
 When a LUKS2 volume is created with `cryptsetup luksFormat`, Linux generates a 256-bit symmetric master key. This key is stored **encrypted** inside the LUKS2 header. Every keyslot in the header holds a different encrypted copy of the same master key, unlocked by different credentials (passphrase, TPM, FIDO2, etc.).
 
-In a TPM-backed setup, the TPM holds a secret that can decrypt one of those keyslots — but only under a specific policy.
+In a TPM-backed setup, the TPM holds a secret that can decrypt one of those keyslots, but only under a specific policy.
 
 ### 1.2 The Static Sealing Model
 
@@ -39,7 +42,7 @@ TPM → Release key only if PCR11 == <stored hash>
 
 This creates a strict equality check. The stored hash is the PCR 11 value recorded at enrollment time, corresponding to the UKI that was running then.
 
-**The fatal flaw:** Any legitimate OS update — new kernel version, updated initramfs, changed cmdline — produces a different UKI. A different UKI produces a different PCR 11. The equality check fails. The TPM refuses to release the key. **The disk becomes permanently inaccessible.**
+**The fatal flaw:** Any legitimate OS update: new kernel version, updated initramfs, changed cmdline: produces a different UKI. A different UKI produces a different PCR 11. The equality check fails. The TPM refuses to release the key. **The disk becomes permanently inaccessible.**
 
 Static sealing makes security and maintainability mutually exclusive.
 
@@ -68,7 +71,7 @@ Forward sealing works because these two values must match. `systemd-measure` com
 
 > [!IMPORTANT]
 > **Why Both Are Needed**
-> `systemd-measure` alone cannot be trusted — it runs offline and could be fed arbitrary inputs. `systemd-stub` alone cannot authorize future states — it only measures what is currently booting.
+> `systemd-measure` alone cannot be trusted: it runs offline and could be fed arbitrary inputs. `systemd-stub` alone cannot authorize future states: it only measures what is currently booting.
 >
 > Forward sealing requires both: `systemd-measure` predicts and signs authorized future states; `systemd-stub` proves the running state is one of them.
 
@@ -128,7 +131,7 @@ If signature validation fails at step 6, or PCR values do not match at step 8, t
 
 ---
 
-## 4. systemd-cryptsetup — The Enforcement Bridge
+## 4. systemd-cryptsetup: The Enforcement Bridge
 
 `systemd-cryptsetup` is the systemd component that manages encrypted disk unlock during early boot. It is the integration point between TPM, LUKS, policy, and the kernel.
 
@@ -191,11 +194,11 @@ Ensure no firmware or bootloader component extends PCR 11 prematurely.
 
 ### 6.2 Consistent Hash Algorithm
 
-All components — measurement, sealing, and unlocking — must use the same PCR bank. Use SHA-256 throughout. Mixing SHA-1 and SHA-256 banks across components will cause mismatches.
+All components: measurement, sealing, and unlocking: must use the same PCR bank. Use SHA-256 throughout. Mixing SHA-1 and SHA-256 banks across components will cause mismatches.
 
 ### 6.3 Boot Phase Markers
 
-`systemd-pcrphase` extends boot phase markers into PCR 11 at runtime: `enter-initrd`, `leave-initrd`, `sysinit`, `ready`. These are part of the measured state. `systemd-measure` accounts for these automatically when invoked correctly — but be aware that PCR 11 at disk-unlock time is not solely the UKI hash. It also contains phase markers from earlier in the boot.
+`systemd-pcrphase` extends boot phase markers into PCR 11 at runtime: `enter-initrd`, `leave-initrd`, `sysinit`, `ready`. These are part of the measured state. `systemd-measure` accounts for these automatically when invoked correctly, but be aware that PCR 11 at disk-unlock time is not solely the UKI hash. It also contains phase markers from earlier in the boot.
 
 ### 6.4 Enrollment Safety in This Implementation
 
@@ -233,7 +236,7 @@ detail.
 | **Update safety** | New UKI with valid `.pcrsig` unlocks without re-enrollment |
 | **Integrity control** | Only signed, authorized PCR states are accepted |
 | **Tamper protection** | Modified kernel, initramfs, or cmdline produce a different PCR 11 |
-| **Rollback prevention** | Old `.pcrsig` files can be removed to deny access to deprecated states |
+| **Rollback control** | Remove deprecated signed UKIs from bootable locations, or rotate the enrolled policy key when old embedded policies must be revoked |
 
 ---
 
@@ -251,7 +254,7 @@ detail.
 
 ## Related Notes
 
-- [Introduction — Architecture Overview](00_Introduction.md)
-- [Module 1 — UKI and Measurement](01_Unified_Kernel_Image.md)
-- [Module 3 — Disk Encryption and Policy Enforcement](03_Disk_Encryption_and_Policy_Enforcement.md)
-- [Module 4 — Governance, Recovery, and Lifecycle](04_Governance_Recovery_Lifecycle.md)
+- [Introduction: Architecture Overview](00_Introduction.md)
+- [Module 1: UKI and Measurement](01_Unified_Kernel_Image.md)
+- [Module 3: Disk Encryption and Policy Enforcement](03_Disk_Encryption_and_Policy_Enforcement.md)
+- [Module 4: Governance, Recovery, and Lifecycle](04_Governance_Recovery_Lifecycle.md)

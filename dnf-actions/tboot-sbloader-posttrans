@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# tboot-sbloader-posttrans — B.4 systemd-boot signing DECIDER (read-and-decide)
-# Version: 0.1.0-draft-B.4-pre-validation
+# tboot-sbloader-posttrans: B.4 systemd-boot signing DECIDER (read-and-decide)
+# Version: 1.0.0
 # Role: compute the 5-entry boot-loader manifest, compare to the stored baseline,
 #       and decide. On confirmed drift, invoke the helper (which signs and
 #       propagates to the ESP). This script NEVER signs, NEVER runs the loader
-#       installer, and NEVER writes the ESP — it only reads, hashes, compares,
+#       installer, and NEVER writes the ESP: it only reads, hashes, compares,
 #       records its own state files, manages the shared sentinel, and calls the
 #       helper.
 # Future canonical path: /usr/local/sbin/tboot-sbloader-posttrans (UsrMerge-aware).
 #
-# State layout — B.4 single locked dir /var/lib/tboot-sbloader (Option A):
+# State layout: B.4 single locked dir /var/lib/tboot-sbloader (Option A):
 #   sbloader-manifest.baseline, last-computed-manifest,
 #   last-decision, last-error                 (this decider)
 #   helper-last-error, helper-last-success    (helper: tboot-sbloader-helper)
@@ -18,7 +18,7 @@
 set -euo pipefail
 umask 077
 
-readonly VERSION="0.1.0-draft-B.4-pre-validation"
+readonly VERSION="1.0.0"
 readonly TAG="tboot-sbloader-posttrans"
 
 # Inputs (read-only here)
@@ -28,7 +28,7 @@ readonly ESP_SYSTEMD="/boot/efi/EFI/systemd/systemd-bootx64.efi"
 readonly ESP_BOOT="/boot/efi/EFI/BOOT/BOOTX64.EFI"
 readonly PKG="systemd-boot-unsigned"
 
-# Helper — sole privileged worker; the ONLY external command the decider invokes.
+# Helper: sole privileged worker; the ONLY external command the decider invokes.
 readonly HELPER="/usr/local/sbin/tboot-sbloader-helper"
 
 # Locked Option A single state dir
@@ -82,14 +82,20 @@ require_root() {
 
 _check_binaries() {
   local b
-  for b in sha256sum rpm awk logger install flock date id cat head mv; do
+  for b in sha256sum rpm awk logger install flock date id cat head mv stat; do
     command -v "$b" >/dev/null 2>&1 || die "preflight" "missing binary: $b"
   done
 }
 
 _ensure_state_dir() {
-  [ -d "$STATE_DIR" ] && return 0
-  install -d -m 0700 -o root -g root "$STATE_DIR"
+  if [ ! -e "$STATE_DIR" ]; then
+    install -d -m 0700 -o root -g root "$STATE_DIR" || return 1
+  fi
+  [ ! -L "$STATE_DIR" ] || return 1
+  [ -d "$STATE_DIR" ] || return 1
+  [ "$(stat -c '%U:%G' "$STATE_DIR" 2>/dev/null)" = "root:root" ] || return 1
+  [ "$(stat -c '%a' "$STATE_DIR" 2>/dev/null)" = "700" ] || return 1
+  [ -w "$STATE_DIR" ] || return 1
 }
 
 die() {
@@ -228,7 +234,7 @@ mode_normal() {
   _check_binaries
   _ensure_state_dir || die "normal" "cannot create $STATE_DIR"
 
-  [ -f "$BASELINE" ] || die "baseline" "baseline absent; refuse to auto-init in normal mode — run: $TAG --prime"
+  [ -f "$BASELINE" ] || die "baseline" "baseline absent; refuse to auto-init in normal mode: run: $TAG --prime"
 
   local cur
   cur="$(compute_manifest)"
@@ -242,11 +248,16 @@ mode_normal() {
   fi
 
   # --- drift path: mark unsafe BEFORE invoking helper ---
-  printf 'reason=%s\ndate=%s\n' "drift before sbloader propagation: $REASON" "$(date -Iseconds)" \
-    > "${SENTINEL}.tmp" 2>/dev/null && mv -f "${SENTINEL}.tmp" "$SENTINEL" 2>/dev/null || true
-  chmod 0600 "$SENTINEL" 2>/dev/null || true
+  local sentinel_tmp="${SENTINEL}.tmp.$$"
+  if ! printf 'reason=%s\ndate=%s\n' "drift before sbloader propagation: $REASON" "$(date -Iseconds)" \
+      > "$sentinel_tmp" 2>/dev/null \
+      || ! chmod 0600 "$sentinel_tmp" 2>/dev/null \
+      || ! mv -f "$sentinel_tmp" "$SENTINEL" 2>/dev/null; then
+    rm -f "$sentinel_tmp" 2>/dev/null || true
+    die "sentinel" "cannot mark system unsafe; helper not invoked"
+  fi
   write_last_decision "drift-detected" "$REASON; invoking helper"
-  log "drift: $REASON — invoking helper"
+  log "drift: $REASON: invoking helper"
 
   [ -x "$HELPER" ] || die "helper" "helper not executable: $HELPER (sentinel retained)"
 

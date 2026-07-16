@@ -76,7 +76,7 @@ A symptom-keyword index for fast lookup is at the end, followed by a quick-refer
 After enrolling custom PK/KEK/db and signing Fedora's `/boot/vmlinuz-*` with the new db key, the system boots to the systemd-boot menu, but Fedora's installed kernel entries are not visible. Selecting them produces no usable boot. systemd-boot offers only its own minimal menu without the kernel entries that Fedora's kernel-install populated under `/boot/loader/entries/*.conf`.
 
 **Root cause:**
-systemd-boot is a Type #2 BLS loader. It reads UKI (`.efi`) entries from `$BOOT_ROOT/EFI/Linux/`. It does not read Type #1 BLS entries (`.conf` files in `/boot/loader/entries/`) populated by Fedora's GRUB-driven layout. Fedora puts kernels and BLS entries on the separate `/boot` partition (typically sda2), and BLS Type #1 entries are designed for GRUB's parser, not systemd-boot. The mental model that "systemd-boot will pick up Fedora's BLS entries automatically" is incorrect.
+systemd-boot is a Type #2 BLS loader. It reads UKI (`.efi`) entries from `$BOOT_ROOT/EFI/Linux/`. It does not read Type #1 BLS entries (`.conf` files in `/boot/loader/entries/`) populated by Fedora's GRUB-driven layout. Fedora puts kernels and BLS entries on the separate `/boot` partition (typically sda2), and BLS Type #1 entries are designed for GRUB's parser, not systemd-boot. The assumption that "systemd-boot will pick up Fedora's BLS entries automatically" is incorrect.
 
 **Reproduction:**
 
@@ -949,7 +949,7 @@ A heredoc-wrapped validation block that calls `cryptsetup open --test-passphrase
 No key available with this passphrase.
 ```
 
-— but no prompt was actually presented to the operator. The script behaves as if an empty passphrase was supplied.
+, but no prompt was actually presented to the operator. The script behaves as if an empty passphrase was supplied.
 
 **Root cause:**
 `bash <<'EOF' ... EOF` redirects bash's stdin to the heredoc content. The heredoc is fully consumed during script parsing. When a child process (like `cryptsetup`) then reads from stdin during execution, it gets EOF or empty input. `cryptsetup` interprets this as a (empty) passphrase attempt and reports the standard "no key matches" failure.
@@ -1003,10 +1003,10 @@ Failed to unseal secret using TPM2: No such device or address
 
 The TPM device itself is reachable and functional; the error reflects a policy-session unseal failure that gets mapped to `ENXIO`.
 
-**Failure mode A — PCR list mismatch:**
+**Failure mode A: PCR list mismatch:**
 Calling `systemd-cryptenroll` with `--tpm2-public-key-pcrs=7+11` when the hook signs only PCR 11 fails. The policy session reconstructed by `systemd-cryptenroll` looks up signature entries by exact PCR-list match. The embedded `.pcrsig` has one entry with `pcrs=[11]`; demanding `[7, 11]` finds no matching entry.
 
-**Failure mode B — phase-chain mismatch on dry-run validation:**
+**Failure mode B: phase-chain mismatch on dry-run validation:**
 Even with the correct PCR list `--tpm2-public-key-pcrs=11`, passing `--tpm2-signature=<json>` fails. `systemd-cryptenroll --tpm2-signature` performs a dry-run validation: it constructs the policy from the signature, seals a test secret to that policy, then attempts to unseal against current TPM state. The hook signs the **enter-initrd** phase value of PCR 11. The current runtime PCR 11 is the **post-`ready`** value. The two values differ; the dry-run unseal fails.
 
 **Root cause:**
@@ -1014,12 +1014,12 @@ Two distinct architectural truths:
 
 1. `--tpm2-public-key-pcrs=` defines which PCRs must be covered by a *signed policy entry*. PCRs not in this list are not consulted via signed policy. The signature in `.pcrsig` must have an entry whose `pcrs` field exactly matches this list.
 
-2. `--tpm2-signature` is an enrollment-time validator. It assumes the signature attests to the **current** TPM state, which is only true if the signature was generated for the post-`ready` phase. Hook-signed `.pcrsig` is generated for `--phases=enter-initrd`, by design — that's the phase at which `systemd-cryptsetup` requests unlock at boot.
+2. `--tpm2-signature` is an enrollment-time validator. It assumes the signature attests to the **current** TPM state, which is only true if the signature was generated for the post-`ready` phase. Hook-signed `.pcrsig` is generated for `--phases=enter-initrd`, by design: that's the phase at which `systemd-cryptsetup` requests unlock at boot.
 
 The combination "signed policy for the PCRs that change + static binding for the PCRs that don't, with no enrollment-time signature validation" reflects the architecture correctly:
 
 - PCR 7 statically bound: represents stable Secure Boot policy state. Static binding pins the TPM to the current SB policy value. Re-enrollment is only needed on SB key rotation (Module 4).
-- PCR 11 signed-policy bound: changes on every UKI rebuild. Signed binding lets the policy key authorise future PCR 11 values (forward sealing).
+- PCR 11 signed-policy bound: changes when measured UKI content changes. Signed binding lets the policy key authorise future PCR 11 values (forward sealing).
 
 **Reproduction:**
 
@@ -1073,7 +1073,7 @@ The Module 3 design doc (`03_Disk_Encryption_and_Policy_Enforcement.md` §1.2) o
 **Verdict:** CONDITIONAL. The behaviour is upstream-correct; operators must understand the propagation path when modifying initramfs-content inputs.
 
 **Symptom:**
-After editing `/etc/crypttab` (or any other initramfs-content input like `/etc/dracut.conf.d/*.conf`) and running `kernel-install add ${KVER}`, the new UKI on the ESP has a fresh sha256, the hook journal is clean, all structural checks pass — but the embedded initramfs inside the UKI still contains the **old** content.
+After editing `/etc/crypttab` (or any other initramfs-content input like `/etc/dracut.conf.d/*.conf`) and running `kernel-install add ${KVER}`, the new UKI on the ESP has a fresh sha256, the hook journal is clean, all structural checks pass, but the embedded initramfs inside the UKI still contains the **old** content.
 
 Inspecting the embedded initramfs reveals the stale crypttab:
 
@@ -1107,7 +1107,7 @@ sed -i '...' /etc/crypttab
 # 2. Run kernel-install add (without refreshing /boot/initramfs first)
 kernel-install add "$(uname -r)" "/lib/modules/$(uname -r)/vmlinuz"
 
-# 3. Verify embedded crypttab — option is missing
+# 3. Verify embedded crypttab: option is missing
 WORK=$(mktemp -d)
 cp "/boot/efi/EFI/Linux/$(cat /etc/machine-id)-$(uname -r).efi" "$WORK/uki.efi"
 objcopy --dump-section .initrd="$WORK/initrd" "$WORK/uki.efi" "$WORK/throwaway.efi"
@@ -1167,7 +1167,7 @@ The Block B.3 validation pattern (`scripts/validate_dnf_kernel_reinstall.sh`) is
 
 ### H.1: dnf5 on Fedora 43 exposes no runtime verbosity flag; plugin debugging requires `/var/log/dnf5.log` inspection
 
-**Verdict:** CONDITIONAL on knowing the actual observability surface; legacy dnf4 mental models do not apply.
+**Verdict:** CONDITIONAL on knowing the actual observability surface; legacy dnf4 operational concepts do not apply.
 
 **Symptom:**
 Attempting to obtain inline plugin-load or transaction-resolution debug output from dnf5 via familiar dnf4 flags returns an error:
@@ -1193,7 +1193,7 @@ $ dnf --help | grep -iE 'verbose|debug|log|trace|quiet'
 **Root cause:**
 dnf5 deliberately collapsed dnf4's verbosity surface. The runtime stdout/stderr stream is intentionally terse. Operational debug output is written instead to a persistent log file at `/var/log/dnf5.log`, which is rotated automatically. Plugin load events (`DEBUG Loading plugin library file=…`, `INFO Loaded libdnf plugin "..."`) appear in this log on every transaction-shaped invocation; they do not appear on stdout/stderr at all.
 
-This is a behaviour change, not a bug — dnf5 considers the structured log file the supported observability mechanism. Project automation that depended on parsing dnf debug output via flags will not work; automation must read `/var/log/dnf5.log` delta windows instead.
+This is a behaviour change, not a bug: dnf5 considers the structured log file the supported observability mechanism. Project automation that depended on parsing dnf debug output via flags will not work; automation must read `/var/log/dnf5.log` delta windows instead.
 
 **Reproduction:**
 
@@ -1210,7 +1210,7 @@ ls -la /var/log/dnf5*
 PRE=$(wc -l </var/log/dnf5.log)
 dnf repoquery --installed less >/dev/null 2>&1
 POST=$(wc -l </var/log/dnf5.log)
-echo "delta: $((POST - PRE)) lines"     # 0 lines — repoquery is too quiet
+echo "delta: $((POST - PRE)) lines"     # 0 lines: repoquery is too quiet
 
 # Demonstrate that transaction-shaped --assumeno DOES write to dnf5.log.
 # Use a harmless package that is NOT currently installed; --assumeno on an
@@ -1274,7 +1274,7 @@ available versions: less-679-2.fc43.x86_64, less-692-6.fc43.x86_64, cannot reins
 This happens even though `less` is installed (`rpm -q less` succeeds) and `less` is available in repos (`dnf repoquery less` returns hits). The specific installed NEVRA is no longer in any enabled repo because the package was once shipped through `updates-testing` (or a now-superseded `updates` revision) and has since been replaced upstream.
 
 **Root cause:**
-`dnf reinstall` requires the installed NEVRA — exact name-epoch-version-release-architecture match — to exist in an enabled repository. The operation downloads the matching `.rpm` and reinstalls atop the existing installation. If no enabled repo offers the exact installed NEVRA, the resolver cannot construct a valid transaction and refuses.
+`dnf reinstall` requires the installed NEVRA: exact name-epoch-version-release-architecture match: to exist in an enabled repository. The operation downloads the matching `.rpm` and reinstalls atop the existing installation. If no enabled repo offers the exact installed NEVRA, the resolver cannot construct a valid transaction and refuses.
 
 Long-lived Fedora 43 installations accumulate packages whose installed version no longer matches any enabled-repo offering, especially for fast-moving utilities. The failure is benign but breaks automation that assumes `reinstall` is always available.
 
@@ -1297,7 +1297,7 @@ echo "$AVAILABLE" | grep -qFx "$INSTALLED" \
 **Fix or workaround:**
 For automated test drivers (such as the B.2.1 trigger validation in `06B` Step 28), do not rely on `dnf reinstall`. Instead select a package that is **not currently installed** and use `dnf install`. The transaction direction (`in`) is identical from the action-rule perspective; the trigger fires the same way.
 
-The candidate must pass four independent gates before it is used as a trigger test driver. Skipping any of these reintroduces risk — gate 3 protects against a candidate that quietly drops files into `/boot` or under `/etc/dracut`; gate 4 protects against a candidate whose dependency closure pulls in `systemd-*` or `kernel-*` packages.
+The candidate must pass four independent gates before it is used as a trigger test driver. Skipping any of these reintroduces risk: gate 3 protects against a candidate that quietly drops files into `/boot` or under `/etc/dracut`; gate 4 protects against a candidate whose dependency closure pulls in `systemd-*` or `kernel-*` packages.
 
 1. **Not currently installed.** `rpm -q <pkg>` returns non-zero.
 2. **Available in enabled repos.** `dnf repoquery --quiet <pkg>` returns at least one NEVRA.
@@ -1333,7 +1333,7 @@ On the reference rebuild this probe selected `figlet`. Other rebuilds may select
 **Operational consequences:**
 The validated B.2.1 trigger package on the reference rebuild was `figlet`, not `less`, for this reason. Future B.2.x test drivers should reach for fresh-install candidates rather than reinstall.
 
-In production B.2.3+, the action rule fires on any inbound transaction matching the package filter regardless of operator command — `dnf install nvidia-driver`, `dnf upgrade dracut`, `dnf reinstall systemd-udev`, etc. The reinstall fragility affects only the test driver, not the production trigger.
+In production B.2.3+, the action rule fires on any inbound transaction matching the package filter regardless of operator command: `dnf install nvidia-driver`, `dnf upgrade dracut`, `dnf reinstall systemd-udev`, etc. The reinstall fragility affects only the test driver, not the production trigger.
 
 **Cross-reference:**
 - `06B`: Step 28 (trigger-package selection probe and validated trigger pattern using `dnf install -y figlet`)
@@ -1359,12 +1359,12 @@ $ grep -Ei 'systemd|kernel|dracut|cryptsetup|luks|tpm2|shim|grub|boot' /tmp/prev
 Total size of inbound packages is 138 KiB.
 ```
 
-The grep hits because `inbound` contains the substring `boot`. The transaction is in fact entirely safe — one package, no dependencies, nothing boot-related — but the gate fires anyway and aborts the surrounding script.
+The grep hits because `inbound` contains the substring `boot`. The transaction is in fact entirely safe: one package, no dependencies, nothing boot-related, but the gate fires anyway and aborts the surrounding script.
 
 **Root cause:**
 dnf5 prints standardised summary lines including `Total size of inbound packages is N KiB.` on every transaction-shaped invocation. The word `inbound` contains the four-character substring `boot`. A `grep -Ei` pattern with the bare alternation `…|boot` matches the substring anywhere it appears in the line, including inside other words. Other short alternation terms in the same pattern have similar exposure (`grub` inside `grubbing`, etc.), but `boot` inside `inbound` is the one that fires reliably because the header line is always present.
 
-This is not specific to dnf5 — any tool that prints prose summaries containing `inbound`, `reboot`, `bootstrap`, etc. will trigger the same false positive when scanned with an unanchored substring pattern.
+This is not specific to dnf5: any tool that prints prose summaries containing `inbound`, `reboot`, `bootstrap`, etc. will trigger the same false positive when scanned with an unanchored substring pattern.
 
 **Reproduction:**
 
@@ -1396,7 +1396,7 @@ A stricter alternative is to scope the grep only to lines beginning with package
 **Operational consequences:**
 The B.2.1 validation session hit this false positive once (figlet transaction flagged on `inbound`). The runbook (`06B` Step 28) uses the word-boundary form from the start, so this finding documents the trap rather than codifying it in the runbook itself.
 
-Any future sensitive-package gate in this project — Module 4 cleanup procedures, B.4 systemd-boot signing automation, attack-scenario test rigs — must use the word-boundary form.
+Any future sensitive-package gate in this project: Module 4 cleanup procedures, B.4 systemd-boot signing automation, attack-scenario test rigs: must use the word-boundary form.
 
 **Cross-reference:**
 - `06B`: Step 28 (sensitive-path grep, uses word-boundary form by design)
@@ -1487,12 +1487,17 @@ Replace `TOKEN` with each forbidden token (`ukify`, `sbsign`, `sbverify`, `syste
 > If an external audit step fires a violation that the in-script self-scan does not, the conclusion is **the harness is wrong**, not the source. Mutating the staged source invalidates the Step-3-recorded sha256 and bakes a workaround for a harness bug into the production decider. Fix the harness instead.
 
 **Operational consequences:**
-B.2.3 Gate 2 Step 6 originally used the `\<TOKEN\>` form and was therefore subject to this false positive. The first Step 6 attempt failed at line 532 (`08-cryptsetup-tooling`). The corrected Step 6 — and every subsequent external read-back harness in this project (Gate 4 staged `.actions` rule review, future Gate 6 negative-validation read-backs, B.2.4 live-transaction read-backs) — must use the Deviation D form.
+B.2.3 Gate 2 Step 6 originally used the `\<TOKEN\>` form and was therefore subject to this false positive. The first Step 6 attempt failed at line 532 (`08-cryptsetup-tooling`). The corrected Step 6, and every subsequent external read-back harness in this project (Gate 4 staged `.actions` rule review, future Gate 6 negative-validation read-backs, B.2.4 live-transaction read-backs): must use the Deviation D form.
 
-ChatGPT initially suggested patching the staged decider source with a `python3` `replace()` call to append `# nolint:trust-boundary` to the category-label line. This proposal was rejected for the reasons listed in the Fix section above; the Gate 2 staged source sha256 `35ad8733f190483f1bd6d071d2aa7cb8b1549286f9040086182443c584473cdd` remained unchanged between the failing and passing Step 6 runs.
+One proposed workaround was to patch the staged decider source with a `python3`
+`replace()` call that appended `# nolint:trust-boundary` to the category-label
+line. That workaround was rejected for the reasons listed above. The Gate 2
+staged source sha256
+`35ad8733f190483f1bd6d071d2aa7cb8b1549286f9040086182443c584473cdd`
+remained unchanged between the failing and passing Step 6 runs.
 
 **Cross-reference:**
-- `06B`: Step 31 (B.2.3 Gate 2 — staged decider read-back validation; corrected Step 6 uses Deviation D regex)
+- `06B`: Step 31 (B.2.3 Gate 2: staged decider read-back validation; corrected Step 6 uses Deviation D regex)
 - `00_Current_Project_State.md`: B.2.3 trust-boundary self-scan regex (Deviation D) recorded in architectural invariants
 - Evidence: 2026-05-24 B.2.3 Gate 2 session, first Step 6 attempt
 - Related: B.2.1 word-boundary regex finding H.3 (same family of trap: substring matching against tokens with non-`\w` characters)
@@ -1564,7 +1569,7 @@ On the validated Fedora 43 VM (`tboot.local.internal`, VMID 500), `bootctl get-d
 **Reproduction:**
 ```bash
 bootctl get-default   # returns empty
-bootctl status        # reports correct Default Entry: and Current Entry:
+bootctl status        # reports correct Default Entry, and Current Entry:
 ```
 
 **Fix or workaround:**
@@ -1586,7 +1591,7 @@ Both `Default Entry:` and `Current Entry:` should be asserted. Asserting `Defaul
 
 ---
 
-### I.3: Fedora 43 `/usr/local/sbin -> bin` UsrMerge symlink — install-target safety checks must `readlink -f` before applying symlink-pure-rejecting tests
+### I.3: Fedora 43 `/usr/local/sbin -> bin` UsrMerge symlink: install-target safety checks must `readlink -f` before applying symlink-pure-rejecting tests
 
 **Verdict:** CONDITIONAL (install-time safety pattern).
 
@@ -1692,7 +1697,7 @@ This applies to every silence-assertion harness in the project: Gates 3.6, 3.7, 
 A Gate 3.5 harness that asserts `--self-test` output contains the line `ok: helper present and executable` (modelled on the equivalent line emitted by `--prime` and `_mode_normal` preflight) fires FAIL even though `--self-test` exited rc=0 and all other expected lines (`ok: running as root`, `ok: required binaries present`, `ok: trust-boundary self-test PASS`, `mode=self-test; preflight + trust-boundary scan only; no compute, no state writes`, `exit reason: self-test PASS`) are present.
 
 **Root cause:**
-The decider's `_preflight` function switches on `$MODE` for the helper-presence check. For `normal` and `prime` modes, missing helper is FATAL (returns rc=5 with `err: helper missing at ${HELPER_BIN}`) and present helper emits `ok: helper present and executable at ${HELPER_BIN}`. For `self-test` and `debug-print` modes, missing helper produces a `warn: helper missing at ${HELPER_BIN} (not fatal in ${MODE})` line only — and present helper emits no positive `ok:` line at all. This is per the decider source design contract:
+The decider's `_preflight` function switches on `$MODE` for the helper-presence check. For `normal` and `prime` modes, missing helper is FATAL (returns rc=5 with `err: helper missing at ${HELPER_BIN}`) and present helper emits `ok: helper present and executable at ${HELPER_BIN}`. For `self-test` and `debug-print` modes, missing helper produces a `warn: helper missing at ${HELPER_BIN} (not fatal in ${MODE})` line only, and present helper emits no positive `ok:` line at all. This is per the decider source design contract:
 
 ```bash
 case "$MODE" in
@@ -1725,7 +1730,7 @@ sha256sum /usr/local/sbin/tboot-dnf-helper | awk '{print $1}' \
 Assert the positive `ok: helper present and executable` line only in `--prime` and `--dry-run` harnesses (where the decider DOES emit it).
 
 **Cross-reference:**
-- `06B`: Step 32 Gate 3.5 (`--self-test` harness — corrected to drop the helper-presence positive assertion)
+- `06B`: Step 32 Gate 3.5 (`--self-test` harness: corrected to drop the helper-presence positive assertion)
 - Decider source `_preflight` mode-switch on helper-presence
 - Evidence: 2026-05-24 Gate 3.5 first attempt (FAIL on missing helper-positive line) and corrected harness
 
@@ -1736,13 +1741,13 @@ Assert the positive `ok: helper present and executable` line only in `--prime` a
 **Verdict:** CONDITIONAL (gate-hygiene rule).
 
 **Symptom:**
-A Gate 3.6 proposal that runs `--prime` twice in the same gate — once to successfully prime (rc=0), then again without `--confirm-prime` to verify the refusal guard (expecting rc=11 and the `err: baseline already exists` message) — deliberately injects an `err:` line into the `tboot-dnf-posttrans` journal under the Gate 3.6 banner. This breaks the gate-hygiene property that "Gate 3.6's journal slice is err-free on success" and contaminates the `last-decision` record's role as the canonical Gate-3-close marker.
+A Gate 3.6 proposal that runs `--prime` twice in the same gate: once to successfully prime (rc=0), then again without `--confirm-prime` to verify the refusal guard (expecting rc=11 and the `err: baseline already exists` message): deliberately injects an `err:` line into the `tboot-dnf-posttrans` journal under the Gate 3.6 banner. This breaks the gate-hygiene property that "Gate 3.6's journal slice is err-free on success" and contaminates the `last-decision` record's role as the canonical Gate-3-close marker.
 
 **Root cause:**
 The decider's `_mode_prime` correctly logs `err: baseline already exists at ${BASELINE_FILE}; refusing to overwrite without --confirm-prime` and returns rc=11 when invoked a second time without `--confirm-prime`. This is the documented refusal guard, and it is correct behaviour. But folding the refusal-guard validation into the same gate as the successful prime mixes two concerns:
 
-1. **Clean prime** — produce the baseline and the unblemished `last-decision` record; the journal slice for this gate should be err-free.
-2. **Refusal-guard probe** — confirm the decider's `--confirm-prime` guard works; this is an error-path validation that legitimately produces an err-level line.
+1. **Clean prime**: produce the baseline and the unblemished `last-decision` record; the journal slice for this gate should be err-free.
+2. **Refusal-guard probe**: confirm the decider's `--confirm-prime` guard works; this is an error-path validation that legitimately produces an err-level line.
 
 Mixing them defeats the purpose of asserting "no err: lines in the Gate 3.6 decider journal slice" as a gate invariant.
 
@@ -1778,7 +1783,7 @@ A Gate 3.7 proposal that runs `--debug-print` three times (once for stdout, once
 dbg_output="$("$DST" --debug-print 2>/dev/null || true)"
 dbg_rc=$?
 ```
-silently masks `--debug-print` failures because `|| true` always succeeds, making `dbg_rc` equal to 0 regardless of whether the command failed. The harness then asserts `[[ "$dbg_rc" -eq 0 ]]` and passes — even if `--debug-print` actually exited non-zero.
+silently masks `--debug-print` failures because `|| true` always succeeds, making `dbg_rc` equal to 0 regardless of whether the command failed. The harness then asserts `[[ "$dbg_rc" -eq 0 ]]` and passes: even if `--debug-print` actually exited non-zero.
 
 **Root cause:**
 1. **Multiple `--debug-print` invocations**: each invocation runs preflight and the manifest compute; each produces ~7 info lines under `tboot-dnf-posttrans` in the journal. Running it three times triples the journal noise inside what should be a single-execution verification gate.
@@ -1859,7 +1864,7 @@ Steps 2 and 3 together prove the plugin loaded and the decider ran; step 1 prove
 **Cross-reference:**
 - `06B`: Step 33 Gate 6A canonical script (uses journald, not dnf5.log).
 - Evidence: 2026-05-25 Gate 6A original verifier FAIL 183 (dnf5.log grep returned empty) → diagnostic → first correction removed the timestamp bound (still failed) → second correction removed the check entirely.
-- Companion: H.1 (dnf5 has no runtime verbosity flag — same family of "dnf5.log is not the evidence surface you think it is").
+- Companion: H.1 (dnf5 has no runtime verbosity flag: same family of "dnf5.log is not the evidence surface you think it is").
 
 ---
 
@@ -1883,7 +1888,7 @@ $ tail -1 /var/log/dnf5.log
 2026-05-24T23:43:01+0200 [...some content...]
 
 $ [[ "2026-05-24T23:43:01+0200" > "2026-05-24T23:42:55+02:00" ]] && echo NEWER || echo OLDER
-OLDER   # wrong by semantic intent — the second timestamp IS newer
+OLDER   # wrong by semantic intent: the second timestamp IS newer
 ```
 
 **Fix or workaround:**
@@ -1919,7 +1924,7 @@ ls -la "$LOCK"
 # -rw-r--r--. 1 root root 0 May 24 23:42 /run/tboot-dnf-posttrans.lock
 
 fuser -v "$LOCK"
-# (empty — no current holder)
+# (empty: no current holder)
 
 # The wrong invariant FAILs:
 [ ! -e "$LOCK" ] && echo OK || echo FAIL
@@ -1934,8 +1939,8 @@ fuser -v "$LOCK"
 Replace the "lock path is absent" invariant with a "lock is not actively held" probe. The probe must be:
 
 - **Non-truncating.** Open the file for read/write via `9<>` (not `9>`, which truncates) so a verifier never modifies the lock file's contents.
-- **Symlink-rejecting.** Refuse to probe a symlink — symlinks at well-known lock paths are a tampering indicator. Use `[ -f "$LOCK" ] && [ ! -L "$LOCK" ]` as the gate before the `flock` probe.
-- **Tolerant of an absent path.** If `$LOCK` does not exist, that is also "not actively held" — pass.
+- **Symlink-rejecting.** Refuse to probe a symlink: symlinks at well-known lock paths are a tampering indicator. Use `[ -f "$LOCK" ] && [ ! -L "$LOCK" ]` as the gate before the `flock` probe.
+- **Tolerant of an absent path.** If `$LOCK` does not exist, that is also "not actively held": pass.
 - **Non-blocking.** `flock -n 9` either acquires-and-releases (when scope ends) or returns rc!=0 immediately. No timeout, no hang.
 
 The canonical bash pattern is:
@@ -1960,9 +1965,9 @@ This pattern is used unchanged for both `/run/tboot-dnf-posttrans.lock` (decider
 
 ---
 
-## K: B.2.4 — decider/helper terminology, DNF5 `--assumeno` semantics, baseline-vs-PCR-value advancement
+## K: B.2.4: decider/helper terminology, DNF5 `--assumeno` semantics, baseline-vs-PCR-value advancement
 
-### K.1: Decider logs production code path as `mode=normal`; helper logs it as `mode=production` — harnesses must not conflate them
+### K.1: Decider logs production code path as `mode=normal`; helper logs it as `mode=production`: harnesses must not conflate them
 
 **Verdict:** CONTEXT-ONLY, but harness-critical.
 
@@ -1977,7 +1982,7 @@ The `tboot-dnf-posttrans` decider and the `tboot-dnf-helper` helper use differen
 | Decider (`tboot-dnf-posttrans`) | `mode=normal` (`info: mode=normal; acquiring decider lock`) | `mode=dry-run`, `mode=debug-print`, `mode=self-test`, `mode=prime` |
 | Helper (`tboot-dnf-helper`) | `mode=production` (`info: starting version=… mode=production`) | `mode=dry-run`, `mode=self-test` |
 
-The two refer to the same end-to-end execution. The terminology differs because the decider was authored later (in B.2.3) and chose `normal` to distinguish from its `prime`, `dry-run`, `debug-print`, and `self-test` modes; the helper was authored earlier (in B.2.2) and uses `production` to distinguish from its `dry-run` and `self-test` modes. A harness assertion of the shape `grep -Ec '…starting version=.*mode=normal' "$HELP_JOURNAL"` matches zero lines because the helper does not log `mode=normal`. The reverse mistake — looking for `mode=production` in the decider journal — also fails.
+The two refer to the same end-to-end execution. The terminology differs because the decider was authored later (in B.2.3) and chose `normal` to distinguish from its `prime`, `dry-run`, `debug-print`, and `self-test` modes; the helper was authored earlier (in B.2.2) and uses `production` to distinguish from its `dry-run` and `self-test` modes. A harness assertion of the shape `grep -Ec '…starting version=.*mode=normal' "$HELP_JOURNAL"` matches zero lines because the helper does not log `mode=normal`. The reverse mistake: looking for `mode=production` in the decider journal: also fails.
 
 **Reproduction:**
 After any successful Gate 3 transaction, inspect both journals:
@@ -1987,10 +1992,10 @@ journalctl -t tboot-dnf-posttrans --since "<gate-3-PRE_TS>" --no-pager -o cat | 
 journalctl -t tboot-dnf-helper    --since "<gate-3-PRE_TS>" --no-pager -o cat | grep -E 'mode='
 ```
 
-The decider output includes `info: mode=normal; acquiring decider lock /run/tboot-dnf-posttrans.lock (flock -w 120)`. The helper output includes `info: starting version=0.1.0-draft-B.2.2-pre-validation mode=production trigger=(none) ppid=<pid>`. The two `mode=` values differ.
+The decider output includes `info: mode=normal; acquiring decider lock /run/tboot-dnf-posttrans.lock (flock -w 120)`. The helper output includes `info: starting version=1.0.0 mode=production trigger=(none) ppid=<pid>`. The two `mode=` values differ.
 
 **What was observed on 2026-05-25 (reference run):**
-The rev-3 Gate 3 harness used the wrong regex for the helper-start assertion and failed at FAIL 411. The mutation itself completed correctly — every other piece of evidence in the captured journal confirms this. The post-hoc continuation verifier below was then run against the now-mutated live state and passed 43/43, providing complete coverage of the Gate 3 evidence. **Gate 3 is closed by post-hoc verification, not by a clean harness replay against the reference-run state.** A corrected 61-assertion harness with the `mode=production` fix applied is recorded in `06B` Step 34 as the canonical replay form for future Gate 3 reruns from a clean rollback to `module5-b2-4-pre-drift-transaction`; it was not executed against the 2026-05-25 reference-run state.
+The rev-3 Gate 3 harness used the wrong regex for the helper-start assertion and failed at FAIL 411. The mutation itself completed correctly: every other piece of evidence in the captured journal confirms this. The post-hoc continuation verifier below was then run against the now-mutated live state and passed 43/43, providing complete coverage of the Gate 3 evidence. **Gate 3 is closed by post-hoc verification, not by a clean harness replay against the reference-run state.** A corrected 61-assertion harness with the `mode=production` fix applied is recorded in `06B` Step 34 as the canonical replay form for future Gate 3 reruns from a clean rollback to `module5-b2-4-pre-drift-transaction`; it was not executed against the 2026-05-25 reference-run state.
 
 **Fix or workaround:**
 For harnesses (the recommended path; lightweight, no source change):
@@ -1999,13 +2004,13 @@ For harnesses (the recommended path; lightweight, no source change):
 - When asserting helper production firing: `grep -Ec '(^|[[:space:]])starting version=.*mode=production'` against the `tboot-dnf-helper` journal.
 - Never assume the two components use the same `mode=` vocabulary.
 
-**Continuation verifier — canonical recovery script for FAIL 411.** When a Gate 3 harness fails at FAIL 411 (or an equivalent "helper start lines = 0" assertion) but the rest of the transaction completed correctly, do **not** roll back to `module5-b2-4-pre-drift-transaction` purely on that signal. Confirm the mutation succeeded by reading the helper journal manually, then run the continuation verifier below. This is the verifier that closed B.2.4 Gate 3 on 2026-05-25 at 43/43 PASS.
+**Continuation verifier: canonical recovery script for FAIL 411.** When a Gate 3 harness fails at FAIL 411 (or an equivalent "helper start lines = 0" assertion) but the rest of the transaction completed correctly, do **not** roll back to `module5-b2-4-pre-drift-transaction` purely on that signal. Confirm the mutation succeeded by reading the helper journal manually, then run the continuation verifier below. This is the verifier that closed B.2.4 Gate 3 on 2026-05-25 at 43/43 PASS.
 
 ```bash
 bash <<'EOF'
 set -u
 
-# B.2.4 Gate 3 continuation verifier — applies the K.1 fix and revalidates.
+# B.2.4 Gate 3 continuation verifier: applies the K.1 fix and revalidates.
 # Closed B.2.4 Gate 3 on 2026-05-25 at 43/43 PASS after the rev-3 reference-run
 # harness failed at FAIL 411 on the mode=normal/mode=production regex bug.
 # Replace PRE_TS / PRE_EPOCH with the actual values captured from the failing
@@ -2099,7 +2104,7 @@ if journal_has_error "$DEC_JOURNAL"; then show_error_lines "$DEC_JOURNAL"; fail 
 
 [ -s "$HELP_JOURNAL" ] || fail 301 "helper journal empty"; PASS=$((PASS+1))
 
-# THE K.1 FIX — helper logs mode=production, NOT mode=normal.
+# THE K.1 FIX: helper logs mode=production, NOT mode=normal.
 HELP_PROD_COUNT="$(grep -Ec '(^|[[:space:]])starting version=.*mode=production' "$HELP_JOURNAL" || true)"
 [ "$HELP_PROD_COUNT" -eq 1 ] || fail 302 "helper production-mode start count=$HELP_PROD_COUNT"; PASS=$((PASS+1))
 
@@ -2160,7 +2165,7 @@ assert_lock_free "$HELPER_LOCK"  708
 PASS=$((PASS+1))
 
 echo ""
-echo "=== B.2.4 Gate 3 continuation verifier — ${PASS} assertions PASS ==="
+echo "=== B.2.4 Gate 3 continuation verifier: ${PASS} assertions PASS ==="
 echo "installed_candidate:          $INSTALLED_NEVRA"
 echo "baseline_sha_POST:            $POST_BASELINE_SHA"
 echo "last_decision_decision_POST:  $POST_LD_DECISION"
@@ -2172,7 +2177,7 @@ echo "hook_count_secondary_kernel:  $HOOK_SECONDARY_COUNT"
 EOF
 ```
 
-**Reference-run result (2026-05-25): 43/43 PASS.** Installed candidate `dracut-network-107-8.fc43.x86_64`. Baseline sha post-Gate-3 `6b032bd81a7f3a57b8350c76cf690deb3a942704a76455b881f7a5d98df82a47`. `last-decision=helper-success`. Booted UKI sha post-Gate-3 `0ac32c8b98428f9a44339a5991eb86e2704986e84ce6e09ae9721bba41726949`. Stored PCR 11 value post-Gate-3 `28E66CE224C9BB0711059470D77103A5AB5A5C1674C03D1BA1563C2FEE52C90F`. Runtime PCR 11 unchanged at `A03EB49C9335D721758AE8AA9C34DA87664C5CAF9FAD7C314C68C038B16435DD` (correct — no reboot). Hook count 1 per kernel.
+**Reference-run result (2026-05-25): 43/43 PASS.** Installed candidate `dracut-network-107-8.fc43.x86_64`. Baseline sha post-Gate-3 `6b032bd81a7f3a57b8350c76cf690deb3a942704a76455b881f7a5d98df82a47`. `last-decision=helper-success`. Booted UKI sha post-Gate-3 `0ac32c8b98428f9a44339a5991eb86e2704986e84ce6e09ae9721bba41726949`. Stored PCR 11 value post-Gate-3 `28E66CE224C9BB0711059470D77103A5AB5A5C1674C03D1BA1563C2FEE52C90F`. Runtime PCR 11 unchanged at `A03EB49C9335D721758AE8AA9C34DA87664C5CAF9FAD7C314C68C038B16435DD` (correct: no reboot). Hook count 1 per kernel.
 
 **Operational consequence:**
 - Harness reviewers must check helper-start regexes specifically for `mode=production` and decider-start regexes specifically for `mode=normal`. Cross-mixing is the failure mode.
@@ -2193,7 +2198,7 @@ EOF
 A Gate 1 preflight harness that runs `dnf install --assumeno "$CANDIDATE"` to preview the resolved transaction plan needs to know which return codes are "normal refusal" versus "unexpected error". A naive `set -e` script would treat the non-zero rc as failure even when the preview succeeded. Conversely, a harness that accepts any non-zero rc as "normal refusal" without inspecting the output content could mask a real DNF error and approve an unsafe candidate.
 
 **Root cause:**
-On Fedora 43 with `dnf5-5.x` (`libdnf5-plugin-actions-5.2.18.0-3.fc43.x86_64`), `dnf install --assumeno <pkg>` resolves the transaction, prints the planned actions, prompts the user with `Is this ok [y/N]:`, treats the `--assumeno` flag as an automatic "no" reply, prints `Operation aborted by the user.`, and exits with rc=1. This rc=1 is the documented refusal exit, not a resolution failure — the transaction simply never commits.
+On Fedora 43 with `dnf5-5.x` (`libdnf5-plugin-actions-5.2.18.0-3.fc43.x86_64`), `dnf install --assumeno <pkg>` resolves the transaction, prints the planned actions, prompts the user with `Is this ok [y/N]:`, treats the `--assumeno` flag as an automatic "no" reply, prints `Operation aborted by the user.`, and exits with rc=1. This rc=1 is the documented refusal exit, not a resolution failure: the transaction simply never commits.
 
 Other DNF5 outcomes that also produce non-zero exits with normal-looking output: `Nothing to do` (rc=0 on dnf5 in observed cases; can vary by package state); resolution conflicts produce different output shapes (`Problem: …`) and different non-zero rc values that should not be confused with the assumeno refusal path.
 
@@ -2209,7 +2214,7 @@ dnf install --assumeno dracut-network; echo "rc=$?"
 ```bash
 dnf install --assumeno some-nonexistent-package-name; echo "rc=$?"
 # … error message …
-# rc=1   (but output shape is different — no "Operation aborted" phrase)
+# rc=1   (but output shape is different: no "Operation aborted" phrase)
 ```
 
 **Fix or workaround:**
@@ -2221,12 +2226,12 @@ case "$ASSUMENO_RC" in
     *)   fail 300 "dnf --assumeno unexpected rc=$ASSUMENO_RC" ;;
 esac
 
-# rc alone is not enough — also require the output to look like a refusal.
+# rc alone is not enough: also require the output to look like a refusal.
 grep -Eiq 'Operation aborted|Is this ok.*\[?y/N\]?|Nothing to do' "$ASSUMENO_OUT" \
     || fail 301 "dnf --assumeno output did not match a documented preview-refusal shape"
 ```
 
-Additional safety: after the assumeno call, scan journald for the relevant tag(s) over the assumeno time window and assert no decider firing — `--assumeno` should never commit a transaction. If the decider journal contains entries during the window, something has gone wrong (the transaction unexpectedly committed, or some other transaction overlapped).
+Additional safety: after the assumeno call, scan journald for the relevant tag(s) over the assumeno time window and assert no decider firing: `--assumeno` should never commit a transaction. If the decider journal contains entries during the window, something has gone wrong (the transaction unexpectedly committed, or some other transaction overlapped).
 
 **Operational consequence:**
 - Acceptable assumeno rc: 0 or 1.
@@ -2237,11 +2242,11 @@ Additional safety: after the assumeno call, scan journald for the relevant tag(s
 **Cross-reference:**
 - `06B` Step 34 Gate 1 Phase 3 commands.
 - Evidence: 2026-05-25 Gate 1 reference run (rc=1, `Operation aborted by the user.`, decider journal silent).
-- Related: H.2 (`dnf reinstall` NEVRA pitfall — different transaction class, same family of DNF5 observability concerns).
+- Related: H.2 (`dnf reinstall` NEVRA pitfall: different transaction class, same family of DNF5 observability concerns).
 
 ---
 
-### K.3: Baseline manifest sha and PCR 11 value advance on different axes — baseline tracks file-content manifest drift, PCR 11 tracks measured-UKI-section drift; both advancing simultaneously is the strong-closure outcome
+### K.3: Baseline manifest sha and PCR 11 value advance on different axes: baseline tracks file-content manifest drift, PCR 11 tracks measured-UKI-section drift; both advancing simultaneously is the strong-closure outcome
 
 **Verdict:** CONTEXT-ONLY.
 
@@ -2251,7 +2256,7 @@ After a successful B.2.4 drift transaction (Gate 3), the operator observes that 
 **Root cause:**
 Two independent computations are happening:
 
-1. **Baseline manifest sha.** Computed by `tboot-dnf-posttrans` from the on-disk *boot-input file-content manifest* — the 14-category enumeration of `/etc/dracut.conf`, `/usr/lib/dracut/modules.d/`, `/lib/modules/<kver>/`, `/usr/lib/firmware/`, udev rules, modprobe configs, systemd early-boot units, cryptsetup tooling, tpm2-tss, storage tooling, fstab/crypttab, kernel-install configs, public-trust certs, and Fedora kernel config. The decider's `_compare_to_baseline` returns `drift` when any file in any category changes content (or directory metadata for `_emit_dir_meta` categories). This signal determines whether the helper is invoked at all.
+1. **Baseline manifest sha.** Computed by `tboot-dnf-posttrans` from the on-disk *boot-input file-content manifest*: the 14-category enumeration of `/etc/dracut.conf`, `/usr/lib/dracut/modules.d/`, `/lib/modules/<kver>/`, `/usr/lib/firmware/`, udev rules, modprobe configs, systemd early-boot units, cryptsetup tooling, tpm2-tss, storage tooling, fstab/crypttab, kernel-install configs, public-trust certs, and Fedora kernel config. The decider's `_compare_to_baseline` returns `drift` when any file in any category changes content (or directory metadata for `_emit_dir_meta` categories). This signal determines whether the helper is invoked at all.
 
 2. **Stored PCR 11 prediction value.** Computed by `tboot-predict-pcr11` from the freshly-rebuilt booted UKI's *measured-content sections*: `.linux`, `.initrd`, `.cmdline`, `.osrel`, `.uname`, `.sbat`, `.pcrpkey`. The predictor runs `systemd-measure calculate` on these sections to produce the PCR 11 value the firmware will produce at next boot. This signal is what `systemd-cryptsetup` will compare against runtime PCR 11 to authorise the TPM2 disk unlock.
 
@@ -2286,7 +2291,7 @@ Not a defect. The architecture deliberately separates these signals. Operational
 - **B.2.4 Gate 7 discipline-gate-lift decision:** the strong-closure path (outcome a) is sufficient to lift the blind `dnf update` discipline gate at Gate 7 close, **subject to Gate 6 reboot validation** (runtime PCR 11 must byte-match the new stored prediction). The strong-closure path is *available* at Gate 7 because of the Gate 3 value advancement; it is not yet *confirmed* until Gate 6 runs.
 - **For Module 4 monitoring and attack scenarios:** drift in either signal independently is a useful detection surface.
 
-**Operational consequence:** Document the closure outcome at Gate 7 close: "B.2.4 closed via outcome (a) — strong-closure path; PCR 11 value advanced from `A03EB49C…35DD` to `28E66CE2…C90F` at Gate 3 and was validated against runtime PCR 11 at Gate 6 reboot."
+**Operational consequence:** Document the closure outcome at Gate 7 close: "B.2.4 closed via outcome (a): strong-closure path; PCR 11 value advanced from `A03EB49C…35DD` to `28E66CE2…C90F` at Gate 3 and was validated against runtime PCR 11 at Gate 6 reboot."
 
 **Cross-reference:**
 - `06B` Step 34 Gate 3; future runbook step covering Gates 4–7 (pending) for the discipline-gate-lift decision.
@@ -2300,15 +2305,15 @@ Not a defect. The architecture deliberately separates these signals. Operational
 
 ### L.1: ESP `/EFI/Linux/` accumulates firmware-loadable forensic UKIs from earlier development; audit before high-risk reboot gates; cleanup is a separate gate
 
-**Verdict:** CONDITIONAL — read-only audit-discipline + cleanup procedure, not a runtime bug.
+**Verdict:** CONDITIONAL: read-only audit-discipline + cleanup procedure, not a runtime bug.
 
 **Symptom.** A `find /boot/efi/EFI/Linux -maxdepth 1 -type f -iname '*.efi'` inventory on a system that has been through Module 5 development (B.1 / B.3 hook iteration) returns more `.efi` files than the kernel-install + helper chain would produce on its own. On the reference VM 500 system at B.2.4 Gate 7 (2026-05-25): 5 total `.efi` files where only 2 are expected (the booted-kernel MID-prefixed UKI and the secondary-kernel MID-prefixed UKI). The 3 unexpected files are not `.loaderror`-suffixed (B.1's broken-objcopy forensic-preservation convention) and are therefore *enumerated by systemd-boot* and *loadable by firmware*.
 
 **Why this is stronger than "menu clutter".** Every unexpected `.efi` file on the reference run was independently verified as:
 
-- **`sbverify`-OK against `/etc/uefi-keys/db.crt`** — signed by the project's own custom Secure Boot key chain.
-- **`signer_count = 1`** — no double-signing artefact, no rejection by the validated `80-tpm2-sign.install` hook's one-signer rule.
-- **VMA-sane** (no section at VMA ≥ `0x180000000`) — no `06F` B.1-style layout corruption that would cause firmware `LoadImage()` rejection.
+- **`sbverify`-OK against `/etc/uefi-keys/db.crt`**: signed by the project's own custom Secure Boot key chain.
+- **`signer_count = 1`**: no double-signing artefact, no rejection by the validated `80-tpm2-sign.install` hook's one-signer rule.
+- **VMA-sane** (no section at VMA ≥ `0x180000000`): no `06F` B.1-style layout corruption that would cause firmware `LoadImage()` rejection.
 
 Together these mean **firmware would accept any of these UKIs at boot if it selected one**. The firmware would not reject the UKI at the Secure Boot gate. The selection mechanism (systemd-boot's "highest version string" fallback when `LoaderEntryDefault` is unset, or a one-shot operator selection via Proxmox console, or NVRAM reset clearing `LoaderEntryDefault`) is what determines which `.efi` runs, and the answer is no longer guaranteed to be one of the two MID-prefixed expected UKIs.
 
@@ -2316,8 +2321,8 @@ Together these mean **firmware would accept any of these UKIs at boot if it sele
 
 | Forensic UKI class | Has `.pcrpkey`/`.pcrsig`? | Expected boot behaviour if selected |
 |---|---|---|
-| **Bare-kver / pre-hook B.1 development artifact** (e.g. `6.19.14-200.fc43.x86_64.efi`) | **No** — both sections absent | Outside the validated forward-sealed path. Firmware accepts (signed by `db.crt`); kernel boots; systemd-stub measures into PCR 11 normally (the extend operation does not require `.pcrsig` to be present); but the runtime PCR 11 will be a different value than any policy-signed prediction. **Expected to fail closed at LUKS unlock** — the policy chain has no signed authorisation for the measured PCR state. Operator sees a passphrase prompt. Fail-safe boundary holds, but the operator does not know whether to roll back or investigate (same symptom as a true Gate 6 failure). |
-| **Test forensic UKI with embedded `.pcrsig`** (e.g. `test-tpm2initrd-pcrsig-*.efi`, `test-ukify-native-pcrsig-*.efi`) | **Yes** — both sections present | Same firmware-acceptance, same kernel boot, same measurement. **MAY unlock LUKS** if the embedded `.pcrpkey` matches the live policy public key the runtime policy chain expects. **This was not proven by the 2026-05-25 audit** — proving it requires extracting `.pcrpkey` from each forensic UKI via `objcopy --dump-section .pcrpkey=/tmp/pcrpkey-$f.pem` (on a read-only copy in tmpfs per `06F` B.1) and comparing against `/etc/systemd/tpm2-pcr-public-key.pem`. If they match: silent boot substitution — the operator may not notice from LUKS behaviour alone that they booted a forensic artifact rather than the validated production UKI. If they don't match: same passphrase-prompt symptom as the bare-kver case. **Do not overclaim**; the verified facts are sbverify + signer count + VMA + section presence + db.crt signature. Whether they would actually unlock is an open question until proven. |
+| **Bare-kver / pre-hook B.1 development artifact** (e.g. `6.19.14-200.fc43.x86_64.efi`) | **No**: both sections absent | Outside the validated forward-sealed path. Firmware accepts (signed by `db.crt`); kernel boots; systemd-stub measures into PCR 11 normally (the extend operation does not require `.pcrsig` to be present); but the runtime PCR 11 will be a different value than any policy-signed prediction. **Expected to fail closed at LUKS unlock**: the policy chain has no signed authorisation for the measured PCR state. Operator sees a passphrase prompt. Fail-safe boundary holds, but the operator does not know whether to roll back or investigate (same symptom as a true Gate 6 failure). |
+| **Test forensic UKI with embedded `.pcrsig`** (e.g. `test-tpm2initrd-pcrsig-*.efi`, `test-ukify-native-pcrsig-*.efi`) | **Yes**: both sections present | Same firmware-acceptance, same kernel boot, same measurement. **MAY unlock LUKS** if the embedded `.pcrpkey` matches the live policy public key the runtime policy chain expects. **This was not proven by the 2026-05-25 audit**: proving it requires extracting `.pcrpkey` from each forensic UKI via `objcopy --dump-section .pcrpkey=/tmp/pcrpkey-$f.pem` (on a read-only copy in tmpfs per `06F` B.1) and comparing against `/etc/systemd/tpm2-pcr-public-key.pem`. If they match: silent boot substitution: the operator may not notice from LUKS behaviour alone that they booted a forensic artifact rather than the validated production UKI. If they don't match: same passphrase-prompt symptom as the bare-kver case. **Do not overclaim**; the verified facts are sbverify + signer count + VMA + section presence + db.crt signature. Whether they would actually unlock is an open question until proven. |
 
 **This was NOT a B.2.4 Gate 6 blocker.** `bootctl status` at Gate 4, Gate 6A pre-reboot probe, and Gate 6B post-reboot validation all reported Default Entry and Current Entry pointing to the MID-prefixed rebuilt 6.19.14 UKI. `LoaderEntryDefault` correctly persisted across the reboot. The forensic UKIs were menu-visible but not selected. The audit-discipline scope is "boot-surface hygiene" + "preventive inventory contract" + "cleanup procedure", not a remediation of an active Gate 6 failure.
 
@@ -2330,9 +2335,9 @@ Together these mean **firmware would accept any of these UKIs at boot if it sele
 | `6.19.14-200.fc43.x86_64.efi` (bare-kver) | 53059144 | 2026-05-07 14:59:48 | `bcfa6403…e097` | OK | 1 | **absent/absent** | sane | unexpected (B.1 development artifact) |
 | `test-tpm2initrd-pcrsig-6.19.14-200.fc43.x86_64.efi` | 56429128 | 2026-05-08 03:10:44 | `b94b273e…c4ca` | OK | 1 | present/present | sane | unexpected (B.3 development artifact) |
 | `test-ukify-native-pcrsig-6.19.14-200.fc43.x86_64.efi` | 53061192 | 2026-05-08 02:57:26 | `56e0aa68…d277` | OK | 1 | present/present | sane | unexpected (B.3 development artifact) |
-| `cf44500de…-6.19.14-200.fc43.x86_64.efi.loaderror` | 53057096 | 2026-05-08 02:50 | (recorded in `06F` B.1) | n/a (not audited — excluded by `-iname '*.efi'` filter) | n/a | n/a | n/a | **correctly excluded** by `.loaderror` suffix (06F B.1 forensic-preservation convention working as designed) |
+| `cf44500de…-6.19.14-200.fc43.x86_64.efi.loaderror` | 53057096 | 2026-05-08 02:50 | (recorded in `06F` B.1) | n/a (not audited: excluded by `-iname '*.efi'` filter) | n/a | n/a | n/a | **correctly excluded** by `.loaderror` suffix (06F B.1 forensic-preservation convention working as designed) |
 
-The B.1 `.loaderror`-suffixed file is the validated cleanup pattern: preserved on disk for forensic reference, made non-bootable by suffix renaming so systemd-boot does not enumerate it. The three unexpected files in the table above have not had that treatment applied. The audit recipe is read-only (no rename, no delete) — cleanup is a separate gate.
+The B.1 `.loaderror`-suffixed file is the validated cleanup pattern: preserved on disk for forensic reference, made non-bootable by suffix renaming so systemd-boot does not enumerate it. The three unexpected files in the table above have not had that treatment applied. The audit recipe is read-only (no rename, no delete): cleanup is a separate gate.
 
 **Read-only audit recipe.**
 
@@ -2348,7 +2353,7 @@ EXP_KVER_BOOTED="6.19.14-200.fc43.x86_64"
 EXP_KVER_SECONDARY="6.17.1-300.fc43.x86_64"
 EXP_CURRENT_UKI_SHA="0ac32c8b98428f9a44339a5991eb86e2704986e84ce6e09ae9721bba41726949"
 
-# Use -iname (case-insensitive) — ESP is VFAT and case-insensitive at the filesystem level.
+# Use -iname (case-insensitive): ESP is VFAT and case-insensitive at the filesystem level.
 # Excludes .loaderror-suffixed forensic artifacts (B.1 convention).
 mapfile -t EFI_FILES < <(find "$EFI_DIR" -maxdepth 1 -type f -iname '*.efi' -printf '%f\n' | sort)
 
@@ -2360,7 +2365,7 @@ mapfile -t EFI_FILES < <(find "$EFI_DIR" -maxdepth 1 -type f -iname '*.efi' -pri
 
 The full canonical script is in `06B` Step 37 Step 2.
 
-**Cleanup recipe (deferred to a separate gate — Block B.2.5).** Do not execute as part of the audit. The cleanup gate's full scope:
+**Cleanup recipe (deferred to a separate gate: Block B.2.5).** Do not execute as part of the audit. The cleanup gate's full scope:
 
 1. **Pre-cleanup snapshot** `module5-b2-5-pre-cleanup` on Proxmox host pve-host (parent `module5-b2-4-validated`).
 2. **Read-only re-audit** of `/boot/efi/EFI/Linux/` to re-confirm the three known forensic UKIs are still the only unexpected files; halt if a new unexpected `.efi` has appeared since Gate 7.
@@ -2414,16 +2419,16 @@ done < <(find /boot/efi/EFI/Linux -maxdepth 1 -type f -iname '*.efi' -printf '%f
 # UNEXPECTED contains anything NOT matching ${EXP_MID}-*.efi
 ```
 
-**Operational consequence of NOT auditing.** Without the audit-discipline contract, a future operator (or attacker with NVRAM write access) could clear `LoaderEntryDefault` and rely on systemd-boot's fallback to select a forensic UKI. Two outcomes follow from the section table above: the bare-kver UKI would fail closed at LUKS unlock (operator sees passphrase prompt — fail-safe but visually identical to a real Gate 6 failure); either `test-*-pcrsig-*` UKI might or might not unlock (boot-time silent substitution remains an open question pending the `.pcrpkey` extraction comparison described above). Both outcomes are within the trust chain's fail-safe envelope (no compromise of LUKS keys, no compromise of policy keys, no bypass of Secure Boot), but the bare-kver outcome creates operator-attention noise and the `test-*` outcome may create silent operational ambiguity.
+**Operational consequence of NOT auditing.** Without the audit-discipline contract, a future operator (or attacker with NVRAM write access) could clear `LoaderEntryDefault` and rely on systemd-boot's fallback to select a forensic UKI. Two outcomes follow from the section table above: the bare-kver UKI would fail closed at LUKS unlock (operator sees passphrase prompt: fail-safe but visually identical to a real Gate 6 failure); either `test-*-pcrsig-*` UKI might or might not unlock (boot-time silent substitution remains an open question pending the `.pcrpkey` extraction comparison described above). Both outcomes are within the trust chain's fail-safe envelope (no compromise of LUKS keys, no compromise of policy keys, no bypass of Secure Boot), but the bare-kver outcome creates operator-attention noise and the `test-*` outcome may create silent operational ambiguity.
 
 **Cross-references.**
 
-- `06F` B.1 — `.loaderror` forensic-preservation convention. Validates the suffix-rename cleanup pattern; `06B` B.2.5 follows the same precedent at semantic scale (`.forensic-b1` / `.forensic-b3` instead of `.loaderror`).
-- `06F` I.2 — `bootctl status` parsing for Default Entry / Current Entry. The pre-reboot probe's bootctl assertion remains the operational guard regardless of ESP inventory state; even if a forensic UKI were selected by systemd-boot fallback, `bootctl get-default` would (incorrectly, per I.2) appear silent — but `bootctl status` parsing would report the unexpected Default Entry. The L.1 ESP-inventory check is therefore complementary to the I.2 bootctl-status parsing guard, not redundant.
-- `06B` Step 37 Step 2 — the canonical read-only audit recipe.
-- `06B` Step 37 closure — the staged DNF discipline lift; ESP cleanup is explicitly scheduled as B.2.5, not folded into Module 4.
-- `05_Update_Workflows_and_Key_Storage.md` §3.4 — the operational-policy framing that includes the pre-reboot ESP-inventory invariant cross-reference.
-- `00_Current_Project_State.md` Next session priorities — B.2.5 listed as the next near-term gate.
+- `06F` B.1: `.loaderror` forensic-preservation convention. Validates the suffix-rename cleanup pattern; `06B` B.2.5 follows the same precedent at semantic scale (`.forensic-b1` / `.forensic-b3` instead of `.loaderror`).
+- `06F` I.2: `bootctl status` parsing for Default Entry / Current Entry. The pre-reboot probe's bootctl assertion remains the operational guard regardless of ESP inventory state; even if a forensic UKI were selected by systemd-boot fallback, `bootctl get-default` would (incorrectly, per I.2) appear silent, but `bootctl status` parsing would report the unexpected Default Entry. The L.1 ESP-inventory check is therefore complementary to the I.2 bootctl-status parsing guard, not redundant.
+- `06B` Step 37 Step 2: the canonical read-only audit recipe.
+- `06B` Step 37 closure: the staged DNF discipline lift; ESP cleanup is explicitly scheduled as B.2.5, not folded into Module 4.
+- `05_Update_Workflows_and_Key_Storage.md` §3.4: the operational-policy framing that includes the pre-reboot ESP-inventory invariant cross-reference.
+- `00_Current_Project_State.md` Next session priorities: B.2.5 listed as the next near-term gate.
 
 **Evidence:** 2026-05-25 B.2.4 Gate 7 read-only audit run on VM 500 (per-file forensic record above; full reference-run output captured in the Obsidian B.2.4 closure attempt-log subtree).
 
@@ -2439,7 +2444,7 @@ done < <(find /boot/efi/EFI/Linux -maxdepth 1 -type f -iname '*.efi' -printf '%f
 **Root cause:**
 Fedora's default install placed shim at `/EFI/BOOT/BOOTX64.EFI` and recorded the path in `shim-x64`'s RPM filelist (`BASENAMES`/`DIRNAMES` tags). The `06B` Step 9 transition overwrote the *content* via `bootctl install` + `sbsign` + `mv -f`, but did **not** unbind the RPM path-ownership. RPM still considers `shim-x64` the owner of that path; `rpm -V shim-x64` will eventually flag the file as `S.5....T.` (size, MD5 digest, mtime drift) on its next verify run.
 
-The latent operational consequence: `dnf reinstall shim-x64` or `dnf upgrade shim-x64` would restore Microsoft-CA-signed shim bytes at `/EFI/BOOT/BOOTX64.EFI`, breaking the fallback-loadability invariant under our enforced PK/KEK/db. Under our keys, the result is **fail-closed** (firmware refuses to load Microsoft-CA-signed shim) — operationally a surprise, not a security compromise.
+The latent operational consequence: `dnf reinstall shim-x64` or `dnf upgrade shim-x64` would restore Microsoft-CA-signed shim bytes at `/EFI/BOOT/BOOTX64.EFI`, breaking the fallback-loadability invariant under our enforced PK/KEK/db. Under our keys, the result is **fail-closed** (firmware refuses to load Microsoft-CA-signed shim): operationally a surprise, not a security compromise.
 
 **Reproduction (read-only):**
 ```bash
@@ -2461,10 +2466,10 @@ Treat as legacy-residue-cleanup-scope, not B.4 scope. B.4 does not manage `shim-
 **Operational consequence right now:** the `dnf upgrade shim*` / `dnf reinstall shim*` discipline-gate row is added to `00_Current_Project_State.md`. Operators must reject `-y` on any DNF resolution containing `shim*` packages until Module 4A closes.
 
 **Cross-reference:**
-- `00_Current_Project_State.md` — discipline-gates table (`dnf upgrade shim*` row).
-- `04A_Legacy_Residue_Cleanup_Gate.md` — full cleanup-gate scope.
-- `06B` Step 9 — original shim → systemd-boot transition where path-ownership was inherited.
-- L.4 — `/EFI/BOOT/` directory-level invariant for the cleanup gate.
+- `00_Current_Project_State.md`: discipline-gates table (`dnf upgrade shim*` row).
+- `04A_Legacy_Residue_Cleanup_Gate.md`: full cleanup-gate scope.
+- `06B` Step 9: original shim → systemd-boot transition where path-ownership was inherited.
+- L.4: `/EFI/BOOT/` directory-level invariant for the cleanup gate.
 
 **Evidence:** 2026-05-25 B.4 Gate 1 (rev-2) Block F output on VM 500.
 
@@ -2475,7 +2480,7 @@ Treat as legacy-residue-cleanup-scope, not B.4 scope. B.4 does not manage `shim-
 **Verdict:** CONTEXT-ONLY (B.4-scope target invariant; enforced by B.4 helper post-Gate-2).
 
 **What it specifies:**
-Under the B.4 chain, the `/boot/efi/EFI/systemd/` directory must contain exactly one file: `systemd-bootx64.efi`. The file must be db.crt-signed with `pesign --show-signature` reporting `signer_count=1` and CN `tboot-lab Signature Database Key`. The file's sha256 must match the content of `/usr/lib/systemd/boot/efi/systemd-bootx64.efi.signed` (modulo any per-write metadata that `bootctl install/update` may introduce — empirically validated at B.4 Gate 2). Zero unexpected `.efi` files in this directory.
+Under the B.4 chain, the `/boot/efi/EFI/systemd/` directory must contain exactly one file: `systemd-bootx64.efi`. The file must be db.crt-signed with `pesign --show-signature` reporting `signer_count=1` and CN `tboot-lab Signature Database Key`. The file's sha256 must match the content of `/usr/lib/systemd/boot/efi/systemd-bootx64.efi.signed` (modulo any per-write metadata that `bootctl install/update` may introduce: empirically validated at B.4 Gate 2). Zero unexpected `.efi` files in this directory.
 
 **Hard form from day one** (no allowlist). At B.4 Gate 1 (2026-05-25 rev-2 Block F) the directory was already clean: exactly `systemd-bootx64.efi`, no other entries.
 
@@ -2495,13 +2500,13 @@ systemd-bootx64.efi
 
 **Cross-reference:**
 - B.4 Gate 2 design freeze (when drafted).
-- L.4 — `/EFI/BOOT/` directory-level invariant for the cleanup gate.
+- L.4: `/EFI/BOOT/` directory-level invariant for the cleanup gate.
 
-**Evidence:** 2026-05-25 B.4 Gate 1 (rev-2) Block F output on VM 500 — directory already in the target state pre-B.4.
+**Evidence:** 2026-05-25 B.4 Gate 1 (rev-2) Block F output on VM 500: directory already in the target state pre-B.4.
 
 ---
 
-### L.4: `/EFI/BOOT/` directory invariant — cleanup-scope target with pre-cleanup allowlist for `fbx64.efi`
+### L.4: `/EFI/BOOT/` directory invariant: cleanup-scope target with pre-cleanup allowlist for `fbx64.efi`
 
 **Verdict:** CONTEXT-ONLY (legacy-cleanup-scope target invariant; **explicitly NOT B.4 scope**).
 
@@ -2542,10 +2547,10 @@ fbx64.efi.forensic-shim-fbx64  size=87816   mtime=2024-03-19T01:00:00Z   (rename
 ```
 
 **Cross-reference:**
-- `04A_Legacy_Residue_Cleanup_Gate.md` — full cleanup-gate procedural sketch.
-- L.2 — `/EFI/BOOT/BOOTX64.EFI` RPM-path-ownership context.
-- L.5 — NVRAM `Boot0008 Fedora` + `/EFI/fedora/` residue companion finding.
-- B.1 — `.loaderror` suffix precedent.
+- `04A_Legacy_Residue_Cleanup_Gate.md`: full cleanup-gate procedural sketch.
+- L.2: `/EFI/BOOT/BOOTX64.EFI` RPM-path-ownership context.
+- L.5: NVRAM `Boot0008 Fedora` + `/EFI/fedora/` residue companion finding.
+- B.1: `.loaderror` suffix precedent.
 
 **Evidence:** 2026-05-25 B.4 Gate 1 (rev-2) Block F output on VM 500 (pre-cleanup state with `fbx64.efi` allowlisted).
 
@@ -2563,7 +2568,7 @@ Title: Linux Boot Manager  ID: 0x0002  Status: active, boot-order
 Title: Fedora              ID: 0x0008  Status: active, boot-order
        File: /boot/efi//EFI/fedora/shimx64.efi
 ```
-`/EFI/fedora/` directory was not enumerated in B.4 Gate 1 (out of scope — Gate 1 inventoried `/EFI/systemd/` and `/EFI/BOOT/`); expected contents are Microsoft-CA-signed `shimx64.efi` plus supporting files (GRUB config, BLS Type #1 entries).
+`/EFI/fedora/` directory was not enumerated in B.4 Gate 1 (out of scope: Gate 1 inventoried `/EFI/systemd/` and `/EFI/BOOT/`); expected contents are Microsoft-CA-signed `shimx64.efi` plus supporting files (GRUB config, BLS Type #1 entries).
 
 **Root cause:**
 The original Fedora install placed shim at `/EFI/fedora/shimx64.efi` and registered the matching `Boot####` NVRAM entry. The `06B` Step 9 transition created the new `Linux Boot Manager` entry (0x0002) and promoted it to BootOrder priority, but did not remove the dormant `Fedora` entry. Under our enforced PK/KEK/db, the target binary `/EFI/fedora/shimx64.efi` is non-loadable (Microsoft-CA-signed) → if firmware ever falls through to `Boot0008`, it fails closed.
@@ -2589,9 +2594,9 @@ Treat as legacy-residue-cleanup-scope. Module 4A's cleanup procedure (when draft
 2. Optionally rename `/EFI/fedora/shimx64.efi` to `.forensic-fedora` (mirrors B.1 / L.4 / B.2.5 rename-with-suffix precedent) and `/EFI/fedora/grub.cfg` / BLS files to similarly non-enumerated suffixes; or leave them in-place since they are firmware-non-loadable already.
 
 **Cross-reference:**
-- `04A_Legacy_Residue_Cleanup_Gate.md` — full cleanup-gate procedural sketch.
-- L.2 — companion finding for `/EFI/BOOT/BOOTX64.EFI` RPM-path-ownership conflict.
-- L.4 — companion finding for `fbx64.efi` cleanup precedent.
+- `04A_Legacy_Residue_Cleanup_Gate.md`: full cleanup-gate procedural sketch.
+- L.2: companion finding for `/EFI/BOOT/BOOTX64.EFI` RPM-path-ownership conflict.
+- L.4: companion finding for `fbx64.efi` cleanup precedent.
 
 **Evidence:** 2026-05-25 B.4 Gate 1 (rev-2) Block I `bootctl status` output on VM 500.
 
@@ -2669,13 +2674,13 @@ done | sort -u
 ```
 
 **Fix or workaround:**
-Documentation correction only. When referencing "the bootctl manpage owner," say `systemd-udev` on Fedora 43, not `systemd`. Anyone reproducing the project on a different distribution should verify the bootctl-owning package locally — Debian/Ubuntu split this differently (typically `systemd-boot-tools`).
+Documentation correction only. When referencing "the bootctl manpage owner," say `systemd-udev` on Fedora 43, not `systemd`. Anyone reproducing the project on a different distribution should verify the bootctl-owning package locally: Debian/Ubuntu split this differently (typically `systemd-boot-tools`).
 
 The `bootctl` binary itself may live in a different subpackage from its manpage depending on Fedora packaging revisions; verify both with `rpm -qf $(command -v bootctl)` and `rpm -qf /usr/share/man/man1/bootctl.1.gz` if it matters.
 
 **Cross-reference:**
 - B.4 Gate 1 rev-2 Block L (bootctl manpage discovery).
-- M.1 — companion Debian/Fedora package-name translation finding.
+- M.1: companion Debian/Fedora package-name translation finding.
 
 **Evidence:** 2026-05-25 B.4 Gate 1 (rev-2) Block L output on VM 500.
 
@@ -2686,7 +2691,7 @@ The `bootctl` binary itself may live in a different subpackage from its manpage 
 > [!note] Section-letter note
 > During the 2026-05-28 working session these findings were referred to informally as `K.4`–`K.7` and `M.2`. They were assigned to a new section **N** on catalog entry: section K is already B.2.4 (Gates 1–3) findings, and M.2/M.4 are already taken (Debian double-signing / `bootctl`-manpage-owner). The F3 probe blocks `N.1`–`N.6` from the working session are unrelated command labels (a different namespace); these are the persisted finding IDs.
 
-### N.1: `bootctl --no-variables update` skips a re-signed same-version binary; only `install` force-copies — use `install` for loader propagation
+### N.1: `bootctl --no-variables update` skips a re-signed same-version binary; only `install` force-copies: use `install` for loader propagation
 
 **Verdict:** CONTEXT-CRITICAL (design lock; wrong choice silently leaves the re-signed loader unpropagated).
 
@@ -2694,7 +2699,7 @@ The `bootctl` binary itself may live in a different subpackage from its manpage 
 After source-side signing of `systemd-bootx64.efi` into `systemd-bootx64.efi.signed`, the operator must propagate the signed binary onto the ESP at `/EFI/systemd/systemd-bootx64.efi` and `/EFI/BOOT/BOOTX64.EFI`. `bootctl --no-variables update` appears to be the natural verb but is a no-op here.
 
 **Root cause:**
-`bootctl update` compares the embedded `LoaderInfo` version string of the source against the installed copy and **skips when the version matches** — even when the byte content differs (a re-sign changes bytes but not `LoaderInfo`, and `sbsign` does not alter the version string). Re-signing the same systemd-boot release therefore produces a version-identical, byte-different binary that `update` refuses to copy (rc=1, message `"same boot loader version in place already"`). `bootctl install` force-copies unconditionally.
+`bootctl update` compares the embedded `LoaderInfo` version string of the source against the installed copy and **skips when the version matches**: even when the byte content differs (a re-sign changes bytes but not `LoaderInfo`, and `sbsign` does not alter the version string). Re-signing the same systemd-boot release therefore produces a version-identical, byte-different binary that `update` refuses to copy (rc=1, message `"same boot loader version in place already"`). `bootctl install` force-copies unconditionally.
 
 **Reproduction (read-only / loopback; does NOT touch `/boot/efi`):**
 ```bash
@@ -2709,7 +2714,7 @@ umount "$mp"; rmdir "$mp"; rm -f /tmp/esp.img
 ```
 
 **Fix or workaround:**
-The B.4 helper's propagation primitive is `bootctl --no-variables install`. The one open caveat — that `install` picks `*.efi.signed` over the unsigned source when both exist in `BOOTLIBDIR` — is closed at helper runtime by a mandatory per-run loopback checkpoint (sign → `.efi.signed` → checkpoint `install` to a throwaway loopback ESP → assert both targets == `src_signed` and ≠ `src_efi` → only then `install` to the real `/boot/efi`). The checkpoint is fail-closed: on mismatch the helper writes the sentinel + `helper-last-error` and exits non-zero without touching `/boot/efi`. Live exercise completed at B.5 Gate 3 (2026-05-28): the checkpoint ran for real and PASSED for both targets before any real-ESP write, the loader was signed to `.efi.signed` `4859f48a…4986` and propagated, and the signed loaders survived the reboot byte-identical (section O.3; `06B` Step 39).
+The B.4 helper's propagation primitive is `bootctl --no-variables install`. The one open caveat: that `install` picks `*.efi.signed` over the unsigned source when both exist in `BOOTLIBDIR`, is closed at helper runtime by a mandatory per-run loopback checkpoint (sign → `.efi.signed` → checkpoint `install` to a throwaway loopback ESP → assert both targets == `src_signed` and ≠ `src_efi` → only then `install` to the real `/boot/efi`). The checkpoint is fail-closed: on mismatch the helper writes the sentinel + `helper-last-error` and exits non-zero without touching `/boot/efi`. Live exercise completed at B.5 Gate 3 (2026-05-28): the checkpoint ran for real and PASSED for both targets before any real-ESP write, the loader was signed to `.efi.signed` `4859f48a…4986` and propagated, and the signed loaders survived the reboot byte-identical (section O.3; `06B` Step 39).
 
 **Cross-reference:**
 - `06B` Step 38 (B.4 install/publish gate). B.5 (publish + first fire).
@@ -2719,7 +2724,7 @@ The B.4 helper's propagation primitive is `bootctl --no-variables install`. The 
 
 ---
 
-### N.2: Read-back/probe harness hygiene — interactive `set -u`, history expansion, bad substitution, forbidden tokens in help prose, and multi-line presence checks
+### N.2: Read-back/probe harness hygiene: interactive `set -u`, history expansion, bad substitution, forbidden tokens in help prose, and multi-line presence checks
 
 **Verdict:** CONTEXT-ONLY (harness-engineering discipline; none are script-source bugs).
 
@@ -2728,7 +2733,7 @@ Several distinct read-back-harness failures, all where the *harness or probe tex
 1. `set -u` at the **interactive** shell top level corrupts a custom `PS1`/`PROMPT_START` and breaks the prompt.
 2. `!` inside an `echo` header triggers bash history expansion.
 3. `${...}` literals in non-quoted echo text trigger bad-substitution / unbound-variable errors.
-4. The literal token `bootctl` in a decider `--help` heredoc body tripped the forbidden-token scan — the scan only excludes lines beginning with `#`, so heredoc help prose is treated as runtime text.
+4. The literal token `bootctl` in a decider `--help` heredoc body tripped the forbidden-token scan: the scan only excludes lines beginning with `#`, so heredoc help prose is treated as runtime text.
 5. A single-line `grep` presence check missed a token that the in-script self-scan (multi-line-aware) caught.
 
 **Root cause:**
@@ -2737,7 +2742,7 @@ The forbidden-token scan is deliberately dumb-but-trustworthy: it greps non-`#` 
 **Fix or workaround:**
 - Run `set -euo pipefail` blocks inside a child shell: `bash <<'EOF' ... EOF`, never at the interactive top level.
 - `set +H` before any block whose echo headers contain `!`.
-- Avoid `${` and forbidden-token literals (`bootctl`, `sbsign`, …) anywhere on a non-`#` line, **including heredoc help text** — describe capabilities in prose that avoids the literal tool name (e.g. the decider `--help` says "never invokes the loader installer" rather than naming the loader installer). This is the standing rule: forbidden-token names must not appear on any non-`#` line of a script, help text included.
+- Avoid `${` and forbidden-token literals (`bootctl`, `sbsign`, …) anywhere on a non-`#` line, **including heredoc help text**: describe capabilities in prose that avoids the literal tool name (e.g. the decider `--help` says "never invokes the loader installer" rather than naming the loader installer). This is the standing rule: forbidden-token names must not appear on any non-`#` line of a script, help text included.
 - Presence checks must be multi-line-aware and exclude `#`-prefixed lines the same way the in-script self-scan does.
 
 **Cross-reference:**
@@ -2748,7 +2753,7 @@ The forbidden-token scan is deliberately dumb-but-trustworthy: it greps non-`#` 
 
 ---
 
-### N.3: `libdnf5-plugins` actions rule layout and direction semantics — `reinstall` matches both `in` and `out`; per-package command dedup is guaranteed
+### N.3: `libdnf5-plugins` actions rule layout and direction semantics: `reinstall` matches both `in` and `out`; per-package command dedup is guaranteed
 
 **Verdict:** CONTEXT-CRITICAL (rule-shape design lock).
 
@@ -2767,19 +2772,19 @@ post_transaction:systemd-boot-unsigned:in:enabled=host-only raise_error=1:/usr/l
 
 **Cross-reference:**
 - N.4 (the `--cacheonly --assumeno` probe that confirmed reinstall resolution).
-- `06F` K.2 (DNF5 `--assumeno` rc=1 refusal semantics — companion).
+- `06F` K.2 (DNF5 `--assumeno` rc=1 refusal semantics: companion).
 - `06B` Step 38; B.5 (rule publish + first fire).
 
 **Evidence:** 2026-05-28 B.4 Gate 2 `libdnf5-actions(8)` manpage review (Q.1) on VM 500.
 
 ---
 
-### N.4: `dnf reinstall --cacheonly --assumeno systemd-boot-unsigned` resolves as `Reinstalling: 1 package` then aborts rc=1 — safe transaction-preview for the B.4 driver
+### N.4: `dnf reinstall --cacheonly --assumeno systemd-boot-unsigned` resolves as `Reinstalling: 1 package` then aborts rc=1: safe transaction-preview for the B.4 driver
 
 **Verdict:** CONTEXT-ONLY (transaction-preview confirmation).
 
 **Symptom:**
-Need to confirm — without mutating the system or publishing the rule — that `dnf reinstall systemd-boot-unsigned` will resolve to a single-package reinstall (the intended B.4 first-fire driver) and that the decider stays silent across a preview.
+Need to confirm: without mutating the system or publishing the rule: that `dnf reinstall systemd-boot-unsigned` will resolve to a single-package reinstall (the intended B.4 first-fire driver) and that the decider stays silent across a preview.
 
 **Root cause / behaviour:**
 `dnf reinstall --cacheonly --assumeno systemd-boot-unsigned` resolves `Reinstalling: 1 package` and aborts at the consent prompt with rc=1 and the documented refusal phrase (`06F` K.2). `--cacheonly` avoids network metadata refresh; `--assumeno` declines at the prompt. No transaction runs; the decider's `post_transaction` callback is not invoked (the actions rule is not even published at this stage, and an aborted transaction has no post_transaction phase anyway).
@@ -2794,7 +2799,7 @@ Treat this as the read-only preview for the B.5 first-fire driver. NEVRA `system
 
 ---
 
-### N.5: `systemd-boot-random-seed.service` writes only `/boot/efi/loader/random-seed` — out of the B.4 boundary; do NOT mask it
+### N.5: `systemd-boot-random-seed.service` writes only `/boot/efi/loader/random-seed`: out of the B.4 boundary; do NOT mask it
 
 **Verdict:** CONTEXT-CRITICAL (mask-list scoping; over-masking would break the loader random seed).
 
@@ -2802,7 +2807,7 @@ Treat this as the read-only preview for the B.5 first-fire driver. NEVRA `system
 The B.4 mask decision (which units to mask so the native systemd updater cannot auto-replace the signed loader) must not be over-broad. Four units reference `bootctl`; only one writes loader binaries.
 
 **Root cause:**
-F3 supplemental read-only probe captured the bodies of all four `bootctl`-referencing units. `systemd-boot-clear-sysfail.service` (`bootctl --graceful set-sysfail ""`, condition-skipped every boot, never executed), `systemd-bootctl@.service` (bare `bootctl` = Varlink `io.systemd.BootControl` server, never instantiated), and `systemd-bootctl.socket` (`ListenStream=/run/systemd/io.systemd.BootControl`) do not install/update the loader or write `/EFI/systemd/`, `/EFI/BOOT/`, or `/usr/lib/systemd/boot/efi/`. `systemd-boot-random-seed.service` runs `bootctl --graceful random-seed`, which writes **only** `/boot/efi/loader/random-seed` — the loader's entropy pool, not a boot binary. Masking it would break the random-seed mechanism without any boot-chain integrity benefit.
+F3 supplemental read-only probe captured the bodies of all four `bootctl`-referencing units. `systemd-boot-clear-sysfail.service` (`bootctl --graceful set-sysfail ""`, condition-skipped every boot, never executed), `systemd-bootctl@.service` (bare `bootctl` = Varlink `io.systemd.BootControl` server, never instantiated), and `systemd-bootctl.socket` (`ListenStream=/run/systemd/io.systemd.BootControl`) do not install/update the loader or write `/EFI/systemd/`, `/EFI/BOOT/`, or `/usr/lib/systemd/boot/efi/`. `systemd-boot-random-seed.service` runs `bootctl --graceful random-seed`, which writes **only** `/boot/efi/loader/random-seed`: the loader's entropy pool, not a boot binary. Masking it would break the random-seed mechanism without any boot-chain integrity benefit.
 
 **Fix or workaround:**
 B.4 mask-list = `systemd-boot-update.service` **only** (the sole unit that runs `bootctl ... install/update` to replace the loader binary). The other four units are explicitly left unmasked. The B.4 install/publish gate verifies post-mask that exactly those four remain unmasked (`is-enabled` ≠ masked).
@@ -2814,18 +2819,18 @@ B.4 mask-list = `systemd-boot-update.service` **only** (the sole unit that runs 
 
 ---
 
-### N.6: B.4 decider no-op (D-1) requires baseline-equality AND converged-shape — baseline-equality alone is insufficient
+### N.6: B.4 decider no-op (D-1) requires baseline-equality AND converged-shape: baseline-equality alone is insufficient
 
 **Verdict:** CONTEXT-CRITICAL (decider correctness lock).
 
 **Symptom:**
-A decider that emits `decision=unchanged` whenever the current manifest equals the stored baseline would wrongly treat a stale-but-equal state as safe — e.g. after a source-package update that leaves a stale `.efi.signed`, or before the first convergence when `src_signed=ABSENT`.
+A decider that emits `decision=unchanged` whenever the current manifest equals the stored baseline would wrongly treat a stale-but-equal state as safe: e.g. after a source-package update that leaves a stale `.efi.signed`, or before the first convergence when `src_signed=ABSENT`.
 
 **Root cause / design lock (D-1):**
 The B.4 decider emits `decision=unchanged` **only if all four hold**: (1) manifest == baseline, (2) `src_signed` ≠ `ABSENT`, (3) `esp_systemd` == `src_signed`, (4) `esp_boot` == `src_signed`. Baseline-equality (condition 1) alone is insufficient; the converged-shape (conditions 2–4) must also hold. Baseline absent in normal mode is a hard FAIL CLOSED (no auto-prime, no helper invocation; the decider tells the operator to run `--prime` in the correct gate). After helper success the decider recomputes, requires converged-shape, advances the baseline, and clears the sentinel.
 
 **Proof (live, 2026-05-28):**
-The primed B.4 baseline is intentionally **non-converged** (`src_signed=ABSENT`): a pre-convergence reference, not an "unchanged safe state." Post-prime, the current manifest equals the baseline (`equal=1`) but the shape is non-converged (`shape=0`), so `--debug-print` reports `would-be decision: drift (equal=1 shape=0)` — never `unchanged`. This is the decisive demonstration that condition 1 alone does not yield a no-op. If post-prime ever read `unchanged`, D-1 is broken.
+The primed B.4 baseline is intentionally **non-converged** (`src_signed=ABSENT`): a pre-convergence reference, not an "unchanged safe state." Post-prime, the current manifest equals the baseline (`equal=1`) but the shape is non-converged (`shape=0`), so `--debug-print` reports `would-be decision: drift (equal=1 shape=0)`: never `unchanged`. This is the decisive demonstration that condition 1 alone does not yield a no-op. If post-prime ever read `unchanged`, D-1 is broken.
 
 **Fix or workaround:**
 The decider source enforces D-1 in `evaluate()` / `_converged_shape()`. The install/publish gate asserts the live proof (`drift (equal=1 shape=0)` post-prime) as a hard check. The first genuine convergence event is the B.5 first-fire transaction.
@@ -2839,7 +2844,7 @@ The decider source enforces D-1 in `evaluate()` / `_converged_shape()`. The inst
 
 ## O: Block B.5 (arm / first-fire / converge / reboot) findings
 
-### O.1: The B.4 decider emits two different decision-string forms — numeric `(equal=N shape=N)` on the drift branch, worded `unchanged (manifest==baseline AND converged-shape)` on the converged branch; matchers must accept both
+### O.1: The B.4 decider emits two different decision-string forms: numeric `(equal=N shape=N)` on the drift branch, worded `unchanged (manifest==baseline AND converged-shape)` on the converged branch; matchers must accept both
 
 **Verdict:** CONTEXT-CRITICAL (harness-correctness lock).
 
@@ -2864,13 +2869,13 @@ esac
 The canonical Gate 4 in `06B` Step 39 carries this dual-form matcher; the pre-arm Gate 0 / Gate 2 checks (which run only against the non-converged primed/armed state) correctly use the numeric `equal=1 shape=0` form because they never observe the converged branch.
 
 **Cross-reference:**
-- N.6 (D-1 no-op semantics — the converged branch this finding observes). `06B` Step 39 (Gate 4 A3).
+- N.6 (D-1 no-op semantics: the converged branch this finding observes). `06B` Step 39 (Gate 4 A3).
 
-**Evidence:** 2026-05-28 B.5 Gate 4 on VM 500 — initial A3 `shape=1` matcher FAIL against converged state; corrected dual-form matcher PASS (`unchanged (manifest==baseline AND converged-shape)`).
+**Evidence:** 2026-05-28 B.5 Gate 4 on VM 500: initial A3 `shape=1` matcher FAIL against converged state; corrected dual-form matcher PASS (`unchanged (manifest==baseline AND converged-shape)`).
 
 ---
 
-### O.2: A UKI rebuilt by the co-firing B.2 helper advances its whole-file sha256 while the predicted/runtime PCR 11 stays byte-identical — the file hash and the measurement track different things
+### O.2: A UKI rebuilt by the co-firing B.2 helper advances its whole-file sha256 while the predicted/runtime PCR 11 stays byte-identical: the file hash and the measurement track different things
 
 **Verdict:** CONTEXT-CRITICAL (do not treat a UKI sha change as a PCR 11 change).
 
@@ -2878,7 +2883,7 @@ The canonical Gate 4 in `06B` Step 39 carries this dual-form matcher; the pre-ar
 During the B.5 first-fire, the B.2 helper rebuilt the booted-kernel UKI; its file sha256 advanced (`0ac32c8b…6949` → `1187c78c…b843`) yet the stored PCR 11 prediction and the runtime PCR 11 both remained `28E66CE2…C90F`. A naive check equating "UKI sha changed" with "boot measurement changed" would wrongly predict a passphrase prompt on reboot.
 
 **Root cause:**
-PCR 11 is computed by `systemd-measure` over the UKI's *measured-content sections* (`.linux`, `.initrd`, `.cmdline`, `.osrel`, `.uname`, `.sbat`, `.pcrpkey`). When those section payloads are bit-identical across a rebuild (same vmlinuz, same cmdline, same os-release, same dracut output, same policy pubkey), PCR 11 is identical by construction. The whole-file sha256 still differs because the PE+ header carries a fresh `TimeDateStamp`, the Authenticode signature is re-applied (different signing-time), and RSA-PSS `.pcrsig` signing uses a random salt — none of which are measured into PCR 11. This is the same axis-separation documented for the B.2.4 dracut-network case.
+PCR 11 is computed by `systemd-measure` over the UKI's *measured-content sections* (`.linux`, `.initrd`, `.cmdline`, `.osrel`, `.uname`, `.sbat`, `.pcrpkey`). When those section payloads are bit-identical across a rebuild (same vmlinuz, same cmdline, same os-release, same dracut output, same policy pubkey), PCR 11 is identical by construction. The whole-file sha256 still differs because the PE+ header carries a fresh `TimeDateStamp`, the Authenticode signature is re-applied (different signing-time), and RSA-PSS `.pcrsig` signing uses a random salt: none of which are measured into PCR 11. This is the same axis-separation documented for the B.2.4 dracut-network case.
 
 **Fix or workaround:**
 Validate PCR 11 against the stored prediction and the runtime sysfs value; validate UKI *identity* against its own RE-PINned sha; never assert that the two move together. The no-passphrase reboot is the operational proof that the measured content was stable.
@@ -2886,22 +2891,22 @@ Validate PCR 11 against the stored prediction and the runtime sysfs value; valid
 **Cross-reference:**
 - E.3 (PCR 11 invariance across UKI regeneration). K.3 (baseline-sha vs PCR-11 advance on different axes). O.3 (the co-fire that triggered the rebuild). `06B` Step 39 (Gate 4 / Gate 6b).
 
-**Evidence:** 2026-05-28 B.5 Gate 4 + Gate 6b on VM 500 — booted UKI `1187c78c…b843`, runtime+stored PCR 11 `28E66CE2…C90F`, no-passphrase TPM2 unlock across reboot.
+**Evidence:** 2026-05-28 B.5 Gate 4 + Gate 6b on VM 500: booted UKI `1187c78c…b843`, runtime+stored PCR 11 `28E66CE2…C90F`, no-passphrase TPM2 unlock across reboot.
 
 ---
 
-### O.3: `dnf reinstall systemd-boot-unsigned` triggers BOTH the broad B.2 (`50-`) chain and the narrow B.4 (`60-`) chain — the two-chain co-fire is expected; B.2 fires first and rebuilds UKIs, then B.4 converges systemd-boot signing
+### O.3: `dnf reinstall systemd-boot-unsigned` triggers BOTH the broad B.2 (`50-`) chain and the narrow B.4 (`60-`) chain: the two-chain co-fire is expected; B.2 fires first and rebuilds UKIs, then B.4 converges systemd-boot signing
 
 **Verdict:** CONTEXT-CRITICAL (B.5 model correction; not a fault).
 
 **Symptom:**
-The original B.5 plan narrated only the B.4 decider/helper sequence for the first-fire. In practice the `dnf reinstall systemd-boot-unsigned` transaction fired the B.2 chain as well, rebuilding initramfs and re-signing both kernels' UKIs and refreshing the PCR 11 prediction file — additional mutation beyond the systemd-boot loader.
+The original B.5 plan narrated only the B.4 decider/helper sequence for the first-fire. In practice the `dnf reinstall systemd-boot-unsigned` transaction fired the B.2 chain as well, rebuilding initramfs and re-signing both kernels' UKIs and refreshing the PCR 11 prediction file: additional mutation beyond the systemd-boot loader.
 
 **Root cause:**
 `50-tboot-posttrans.actions` (B.2) has an **empty** `package_filter`, so it matches every transaction; `60-tboot-sbloader.actions` (B.4) is filtered to `systemd-boot-unsigned`. Because `systemd-boot-unsigned` is boot-input-relevant, the B.2 decider correctly detects drift and runs its helper (dracut + kernel-install + `80-tpm2-sign` per kernel) before the B.4 chain runs. Both deciders are independent, both fail-closed, both converge. The PCR 11 prediction landed unchanged (`28E66CE2…C90F`) because the measured-content inputs were stable (O.2).
 
 **Fix or workaround:**
-Accept the co-fire as designed behaviour and validate **both** convergence stories at the post-fire gate: B.4 (signed `.efi.signed`, both ESP loaders == signed, baseline converged) and B.2 (`last-computed-manifest` sha == baseline sha, `last-decision=helper-success`, sentinels clear). RE-PIN the values that advanced during the transaction — they supersede the pre-B.5 pins:
+Accept the co-fire as designed behaviour and validate **both** convergence stories at the post-fire gate: B.4 (signed `.efi.signed`, both ESP loaders == signed, baseline converged) and B.2 (`last-computed-manifest` sha == baseline sha, `last-decision=helper-success`, sentinels clear). RE-PIN the values that advanced during the transaction: they supersede the pre-B.5 pins:
 
 | Artifact | Pre-B.5 (superseded) | RE-PINned at B.5 (authoritative) |
 |---|---|---|
@@ -2909,14 +2914,17 @@ Accept the co-fire as designed behaviour and validate **both** convergence stori
 | booted 6.19.14 UKI | `0ac32c8b…6949` | `1187c78ce2435e0a5c27ed8f35e0fd653da3580ac7a2597b03a30bbfd5deb843` |
 | secondary 6.17.1 UKI | `b8b15801…8994` | `ac9c50903a370b9f9b79789181ef14f685a620294c56a7d26aacc5dfda78b5e7` |
 | systemd-boot signed loader (`.efi.signed` + both ESP) | (absent pre-B.5) | `4859f48ac4d0776751e21cefc39cd42017ff496153dc8ed3577e2b0fdb114986` |
-| PCR 11 prediction | `28E66CE2…C90F` | `28E66CE2…C90F` (unchanged — O.2) |
+| PCR 11 prediction | `28E66CE2…C90F` | `28E66CE2…C90F` (unchanged: O.2) |
 
 The B.2.5 ESP forensic-UKI residue (L.1: bare-kver `6.19.14…efi`, `test-tpm2initrd-pcrsig-…`, `test-ukify-native-pcrsig-…`) is unaffected by B.5 and remains deferred to Module 4 / B.2.5; B.5 Gate 6b deliberately validated the booted/Current/Default entry rather than asserting ESP `.efi` file count.
 
 **Cross-reference:**
 - N.3 (`50-` empty-filter matches all; `60-` filtered to `systemd-boot-unsigned`). O.1 (decider decision forms). O.2 (UKI-sha vs PCR-11 axes). L.1 (ESP residue, out of scope). `06B` Step 39 (Gate 3 / Gate 4).
 
-**Evidence:** 2026-05-28 B.5 Gate 3 on VM 500 — tee'd transaction log shows `tboot-dnf-posttrans`/`tboot-dnf-helper` (B.2) firing first, then `tboot-sbloader-posttrans`/`tboot-sbloader-helper` (B.4); both reached success; ChatGPT-ratified as expected-and-benign.
+**Evidence:** The 2026-05-28 B.5 Gate 3 transaction log on VM 500 shows
+`tboot-dnf-posttrans` and `tboot-dnf-helper` (B.2) firing first, followed by
+`tboot-sbloader-posttrans` and `tboot-sbloader-helper` (B.4). Both chains
+completed successfully, confirming that the co-fire is expected behavior.
 
 ---
 
@@ -2936,7 +2944,7 @@ This table is the fast-lookup version of the FORBIDDEN verdicts above. If you fi
 | Run `apt`, `update-initramfs` from mentor notes | Debian-specific, doesn't apply to Fedora | Use `dnf` and `dracut --force` (or `kernel-install add`) | M.1 |
 | Re-sbsign an already-signed UKI | Produces 2 Authenticode signers, fails the hook's signer-count check | Trust `ukify build` to sign once | M.2 |
 | Duplicate `root=UUID=` fields in cmdline | Behavior is parser-implementation-defined | Single `root=` and single `rd.luks.uuid=` per cmdline | M.3 |
-| Assert the literal `shape=1` in the B.4 decider's converged `--debug-print` decision line | The decider prints `drift (equal=N shape=N)` only on the drift branch; the converged branch prints the worded `unchanged (manifest==baseline AND converged-shape)` — there is no `shape=1` numeric form | Parse the decision token and branch on text (`case` accepting `unchanged*converged-shape*` and `drift*`) | O.1 |
+| Assert the literal `shape=1` in the B.4 decider's converged `--debug-print` decision line | The decider prints `drift (equal=N shape=N)` only on the drift branch; the converged branch prints the worded `unchanged (manifest==baseline AND converged-shape)`: there is no `shape=1` numeric form | Parse the decision token and branch on text (`case` accepting `unchanged*converged-shape*` and `drift*`) | O.1 |
 | Assert `lock path is absent` after a clean decider/helper exit | `flock(1)` releases on fd close but does not unlink; the file persists across invocations as a deliberate `flock` idiom, not a bug. The "absent" invariant is structurally wrong, not just brittle. | Use the `flock <> -n` probe pattern with symlink rejection: `if [ -e "$LOCK" ] \|\| [ -L "$LOCK" ]; then [ -f "$LOCK" ] && [ ! -L "$LOCK" ] \|\| fail; ( exec 9<>"$LOCK"; flock -n 9 ) \|\| fail; fi` | J.3 |
 | Assert `Loaded libdnf plugin "actions"` in `/var/log/dnf5.log` as Gate 6A evidence | The file does not log plugin-load entries in this Fedora 43 environment | Use `journalctl -q -t tboot-dnf-posttrans --since "$PRE_TIME"` as authoritative evidence; assert `exit reason:` line count + `last-decision` epoch advancement | J.1 |
 | Lexicographically compare `date -Iseconds` output against `/var/log/dnf5.log` timestamps | TZ-offset formats are incompatible (`+02:00` vs `+0200`) and dnf5.log is not the authoritative source anyway | Use `journalctl --since` (handles `+02:00`-format input natively via systemd's time parser) | J.2 |
@@ -2959,7 +2967,7 @@ This table is the fast-lookup version of the FORBIDDEN verdicts above. If you fi
 | dnf5 runtime verbosity | No `--debuglevel`, no `-v`, no `--verbose`; only `--quiet` and `--debugsolver`. Read `/var/log/dnf5.log` deltas instead | H.1 |
 | `dnf reinstall` as test driver | Requires installed NEVRA in repos; brittle on long-lived systems. Use fresh `dnf install` of a not-installed candidate | H.2 |
 | `grep -Ei` against dnf5 transaction output | `boot` substring matches `inbound` header. Use `\b(term)([-_].*)?\b` word-boundary form | H.3 |
-| External audit-harness token-boundary regex | Must match the in-script self-scan (Deviation D — see H.4 body for the regex in a fenced code block). Do not patch staged sources to silence harness false positives | H.4 |
+| External audit-harness token-boundary regex | Must match the in-script self-scan (Deviation D: see H.4 body for the regex in a fenced code block). Do not patch staged sources to silence harness false positives | H.4 |
 | PCR 11 value identical after helper regeneration | Expected when measured-content inputs are bit-identical; assert on mtime advancement instead of value change | E.3 |
 | `qm listsnapshot` parsing | Strip tree-glyph prefixes (`` `-> ``, `-> `) before column-1 awk match; ignore cosmetic `Wide character in printf` warnings from PVE Perl module | I.1 |
 | `bootctl get-default` empty on Fedora 43 VM | Treat as non-authoritative; parse `bootctl status` for `Default Entry:` and `Current Entry:` instead | I.2 |
@@ -2976,7 +2984,7 @@ This table is the fast-lookup version of the FORBIDDEN verdicts above. If you fi
 | DNF5 `--assumeno` rc=1 on Fedora 43 | Documented refusal exit, not a resolution failure. Required combined check: rc ∈ {0,1} AND output matches `Operation aborted by the user.` / `Is this ok [y/N]:` / `Nothing to do` AND decider journal silent over the assumeno window. | K.2 |
 | Baseline manifest sha advanced; PCR 11 value also advanced | Strong-closure path (outcome a per K.3). dracut autodetect pulled the new module's measured content into the UKI's `.initrd` section. Gate 7 closure-criterion documents the path as (a); the strong-closure axis was confirmed by Gate 6B (runtime PCR 11 byte-matched stored prediction `28E66CE2…C90F` across real reboot, 28/28 PASS). | K.3 |
 | Baseline manifest sha advanced but PCR 11 value unchanged | Helper-path-only closure (outcome b per K.3). Chain machinery proven; value-tracking axis not exercised by this candidate. Gate 7 closure-criterion documents the path as (b). | K.3 |
-| Baseline unchanged but PCR 11 value advanced | Anomalous (outcome d per K.3). Should not occur via the trusted-boot chain — indicates out-of-band predictor invocation or chain bypass. Investigate. | K.3 |
+| Baseline unchanged but PCR 11 value advanced | Anomalous (outcome d per K.3). Should not occur via the trusted-boot chain: indicates out-of-band predictor invocation or chain bypass. Investigate. | K.3 |
 
 ---
 
@@ -3030,20 +3038,20 @@ For fast lookup. If you observe the symptom on the left, look at the finding on 
 | `grep -Fq 'Loaded libdnf plugin "actions"' /var/log/dnf5.log` returns rc=1 after a transaction that demonstrably fired the production rule | J.1 (`dnf5.log` does not record plugin-load entries in this Fedora 43 environment; switch to journald) |
 | Lexicographic timestamp comparison against `dnf5.log` rejects newer entries as older | J.2 (TZ-offset format mismatch: `+02:00` vs `+0200`) |
 | `[ ! -e "/run/tboot-dnf-posttrans.lock" ]` fails after a clean Gate 6A / 6B run; `fuser -v` shows no holder | J.3 (`flock` does not unlink; the right invariant is "not actively held") |
-| `[ ! -e "/run/tboot-dnf-helper.lock" ]` fails (file present, no holder) | J.3 (same — both decider and helper locks share this idiom) |
+| `[ ! -e "/run/tboot-dnf-helper.lock" ]` fails (file present, no holder) | J.3 (same: both decider and helper locks share this idiom) |
 | Gate 3 harness `FAIL 411: helper normal-mode start lines = 0` but decider/helper/hook journals show full successful end-to-end flow | K.1 (regex bug: harness used `mode=normal` for helper; helper logs `mode=production`. Mutation succeeded; recover via K.1 continuation verifier.) |
 | Need to confirm post-hoc that a B.2.4 Gate 3 mutation succeeded after a harness regex bug | K.1 (canonical continuation verifier in this finding's body; 43/43 PASS on the 2026-05-25 reference run) |
 | Decider journal shows `mode=normal` but helper journal in same transaction window shows `mode=production` | K.1 (expected; same code path, different terminology; not a bug) |
 | `dnf install --assumeno <pkg>` returns rc=1 with `Operation aborted by the user.` on Fedora 43 | K.2 (documented refusal exit; rc ∈ {0,1} is acceptable when combined with refusal-phrase + decider-silent checks) |
 | Harness needs to validate a DNF5 transaction preview without committing | K.2 (three-part check: rc, refusal phrase, decider journal silent over window) |
-| After Gate 3: baseline manifest sha changed AND stored PCR 11 value changed | K.3 outcome (a) — strong-closure path |
-| After Gate 3: baseline manifest sha changed but stored PCR 11 value unchanged | K.3 outcome (b) — helper-path-only closure |
-| After Gate 3: stored PCR 11 value changed but baseline manifest sha unchanged | K.3 outcome (d) — anomalous; investigate (out-of-band predictor invocation or chain bypass) |
+| After Gate 3: baseline manifest sha changed AND stored PCR 11 value changed | K.3 outcome (a): strong-closure path |
+| After Gate 3: baseline manifest sha changed but stored PCR 11 value unchanged | K.3 outcome (b): helper-path-only closure |
+| After Gate 3: stored PCR 11 value changed but baseline manifest sha unchanged | K.3 outcome (d): anomalous; investigate (out-of-band predictor invocation or chain bypass) |
 | Gate 7 discipline-gate-lift decision: when does the strong-closure path apply | K.3 (outcome (a) sufficient subject to Gate 6 reboot validation; outcome (b) closes machinery only) |
 | `find /boot/efi/EFI/Linux -maxdepth 1 -type f -iname '*.efi'` returns more files than the kernel-install + helper chain would produce | L.1 (forensic UKIs accumulate from B.1 / B.3 development; audit before any high-risk reboot gate) |
-| An unexpected `.efi` file on the ESP is `sbverify`-OK against `db.crt` with `signer_count = 1` and VMA-sane | L.1 (firmware-loadable forensic UKI; not "menu clutter" — would be accepted by firmware if selected) |
-| Forensic UKI on ESP has section table missing `.pcrpkey` and `.pcrsig` | L.1 (pre-hook B.1 development artifact — would boot but fail closed at LUKS unlock if selected; passphrase prompt is the visible symptom) |
-| Forensic UKI on ESP has `.pcrpkey`/`.pcrsig` present but is not the MID-prefixed kernel-install-produced UKI | L.1 (B.3 development artifact — MAY unlock LUKS if its embedded `.pcrpkey` matches the live policy public key; NOT PROVEN by the audit; silent boot substitution possible if `LoaderEntryDefault` is cleared) |
+| An unexpected `.efi` file on the ESP is `sbverify`-OK against `db.crt` with `signer_count = 1` and VMA-sane | L.1 (firmware-loadable forensic UKI; not "menu clutter": would be accepted by firmware if selected) |
+| Forensic UKI on ESP has section table missing `.pcrpkey` and `.pcrsig` | L.1 (pre-hook B.1 development artifact: would boot but fail closed at LUKS unlock if selected; passphrase prompt is the visible symptom) |
+| Forensic UKI on ESP has `.pcrpkey`/`.pcrsig` present but is not the MID-prefixed kernel-install-produced UKI | L.1 (B.3 development artifact: MAY unlock LUKS if its embedded `.pcrpkey` matches the live policy public key; NOT PROVEN by the audit; silent boot substitution possible if `LoaderEntryDefault` is cleared) |
 | Need to design a pre-reboot probe contract that catches new firmware-visible artifacts on the ESP before B.2.5 closes | L.1 (staged allowlist: require two MID-prefixed UKIs, allow the three known forensic artifacts, hard-fail on any additional unexpected `.efi`) |
 | `.loaderror`-suffixed UKI is visible in `ls /boot/efi/EFI/Linux/` but does NOT appear in `find -iname '*.efi'` output | L.1 / B.1 (validated forensic-preservation convention working as designed; suffix excludes it from systemd-boot enumeration) |
 | `LoaderEntryDefault` cleared, NVRAM reset, or firmware factory reset on a system with unexpected `.efi` files in `/EFI/Linux/` | L.1 (systemd-boot "highest version string" fallback may select a firmware-loadable forensic UKI; execute B.2.5 cleanup FIRST) |
@@ -3052,7 +3060,7 @@ For fast lookup. If you observe the symptom on the left, look at the finding on 
 | Future Gate 6A / Gate 6B / Module 4 monitoring needs to detect a new firmware-visible artifact appearing on the ESP | L.1 (preventive ESP-inventory check in the pre-reboot probe contract; staged allowlist until B.2.5, then hard form) |
 | `rpm -qf /boot/efi/EFI/BOOT/BOOTX64.EFI` returns `shim-x64-...` despite the file's content being our sbsigned systemd-boot | L.2 (RPM-path-ownership conflict inherited from Fedora-default install; legacy-cleanup-scope; **not B.4 scope**) |
 | `rpm -V shim-x64` would flag `BOOTX64.EFI` as `S.5....T.` (size, digest, mtime drift) | L.2 (latent operational symptom of the path-ownership conflict) |
-| `dnf reinstall shim-x64` or `dnf upgrade shim*` resolution lists a shim package | L.2 (operator must abort — shim transaction restores Microsoft-CA-signed bytes at `/EFI/BOOT/BOOTX64.EFI`, fail-closed under enforced PK/KEK/db; discipline gate retained until Module 4A) |
+| `dnf reinstall shim-x64` or `dnf upgrade shim*` resolution lists a shim package | L.2 (operator must abort: shim transaction restores Microsoft-CA-signed bytes at `/EFI/BOOT/BOOTX64.EFI`, fail-closed under enforced PK/KEK/db; discipline gate retained until Module 4A) |
 | Need to specify a directory-level invariant for `/EFI/systemd/` under the B.4 chain | L.3 (exactly `systemd-bootx64.efi`, db.crt-signed, signer_count=1; zero unexpected `.efi`; hard form from day one) |
 | Need to specify a directory-level invariant for `/EFI/BOOT/` covering legacy `fbx64.efi` | L.4 (pre-cleanup allowlist: BOOTX64.EFI + optionally fbx64.efi + zero other; post-cleanup drop allowlist) |
 | `find /boot/efi/EFI/BOOT -maxdepth 1 -type f -iname '*.efi'` returns `fbx64.efi` alongside `BOOTX64.EFI` | L.4 (pre-cleanup state; `fbx64.efi` is Microsoft-CA-signed shim fallback bridge; fail-closed under our PK/KEK/db; cleanup-scope rename-with-suffix per the B.1 `.loaderror` / B.2.5 `.forensic-*` precedent) |
@@ -3061,30 +3069,299 @@ For fast lookup. If you observe the symptom on the left, look at the finding on 
 
 ---
 
-## Last update
+## Update history
+ 2026-07-16: Published source revision 1.0.0. Both deciders now stop before invoking a helper when
+the unsafe-reboot sentinel cannot be written. The systemd-boot decider and helper also reject a
+symlinked state directory and require `root:root` ownership with mode 0700. Documentation was
+aligned with the embedded UKI policy model, controlled key rotation, TPM replacement and the June
+operational validation. The current artifact hashes are recorded in `SHA256SUMS`; older hashes
+below identify the historical May validation run. The revised scripts passed repository integrity,
+syntax and embedded-copy checks. A new live transaction and reboot regression run remains
+outstanding.
 
-2026-05-28 (latest, post-B.5-close): Added section O (Block B.5 arm/first-fire/converge/reboot findings) with three findings O.1–O.3, discovered during the 2026-05-28 `06B` Step 39 (B.5) execution session. **O.1** (the B.4 decider emits a numeric `(equal=N shape=N)` decision string on the drift branch but a worded `unchanged (manifest==baseline AND converged-shape)` string on the converged branch — a Gate 4 matcher asserting `shape=1` FAILS against genuinely-converged state; the canonical Gate 4 carries a dual-form matcher). **O.2** (a UKI rebuilt by the co-firing B.2 helper advances its whole-file sha256 while predicted+runtime PCR 11 stay byte-identical, because PCR 11 measures section content not the PE+ timestamp/Authenticode/PSS-salt — do not treat a UKI sha change as a measurement change; cross-refs E.3/K.3). **O.3** (`dnf reinstall systemd-boot-unsigned` triggers BOTH chains — the broad B.2 `50-` rule fires first and rebuilds UKIs, then the narrow B.4 `60-` rule converges systemd-boot signing; this two-chain co-fire is the B.5 model correction, expected and benign; includes the RE-PIN table superseding the pre-B.5 pins). None of the three are source bugs; O.1 is a harness-matcher correction (now baked into the canonical Gate 4), O.2/O.3 are behavioural model corrections. **B.5 closed end-to-end** via `06B` Step 39 Gates 0–7: arm (publish `60-tboot-sbloader.actions`), first-fire (`dnf reinstall systemd-boot-unsigned`, rc=0, two-chain co-fire), convergence proof (both chains), reboot validation (**runtime PCR 11 = `28E66CE2…C90F` byte-match, no LUKS passphrase, Secure Boot enabled, both chains converged**), closure snapshot `module5-b5-validated`. **Discipline-gate lift:** `dnf upgrade systemd*` and `dnf reinstall systemd-boot*` are now allowed under standard operator review (B.4 install + B.5 arm/converge/reboot both validated); still gated are `dnf upgrade kernel*` (kernel-upgrade class) and blind `dnf update`/`dnf upgrade` without explicit package review. RE-PIN authoritative values adopted: B.2 baseline `47903d22…c220d` (was `6b032bd8…2a47`), booted UKI `1187c78c…b843` (was `0ac32c8b…6949`), secondary UKI `ac9c5090…b5e7`, systemd-boot signed loaders `4859f48a…4986`, PCR 11 unchanged `28E66CE2…C90F`. The ESP forensic-UKI residue (L.1) is unchanged by B.5 and remains deferred to Module 4 / B.2.5. Frozen UKI-signing authority unchanged: hook `a455444a…3b8c502f`. Cross-references added to `06B` Step 39, `00_Current_Project_State.md`, and `05_Update_Workflows_and_Key_Storage.md` §3.5.
+2026-06-19: The validated host completed an unrestricted `dnf update`, including a kernel version
+upgrade. The DNF actions chain detected drift, rebuilt and signed the UKIs, refreshed the PCR 11
+prediction and advanced its baseline. A subsequent reboot completed without a recovery passphrase,
+and runtime PCR 11 matched the stored prediction. This operational result supersedes the earlier
+discipline-gate statements that kept blind updates and kernel upgrades blocked. The raw terminal
+transcript was not retained, so the May gate records below remain the detailed captured evidence.
 
-## Last update
+2026-05-28 (latest, post-B.5-close): Added section O (Block B.5 arm/first-fire/converge/reboot
+findings) with three findings O.1–O.3, discovered during the 2026-05-28 `06B` Step 39 (B.5)
+execution session. **O.1** (the B.4 decider emits a numeric `(equal=N shape=N)` decision string on
+the drift branch but a worded `unchanged (manifest==baseline AND converged-shape)` string on the
+converged branch: a Gate 4 matcher asserting `shape=1` FAILS against genuinely-converged state; the
+canonical Gate 4 carries a dual-form matcher). **O.2** (a UKI rebuilt by the co-firing B.2 helper
+advances its whole-file sha256 while predicted+runtime PCR 11 stay byte-identical, because PCR 11
+measures section content not the PE+ timestamp/Authenticode/PSS-salt: do not treat a UKI sha change
+as a measurement change; cross-refs E.3/K.3). **O.3** (`dnf reinstall systemd-boot-unsigned`
+triggers BOTH chains: the broad B.2 `50-` rule fires first and rebuilds UKIs, then the narrow B.4
+`60-` rule converges systemd-boot signing; this two-chain co-fire is the B.5 model correction,
+expected and benign; includes the RE-PIN table superseding the pre-B.5 pins). None of the three are
+source bugs; O.1 is a harness-matcher correction (now baked into the canonical Gate 4), O.2/O.3 are
+behavioural model corrections. **B.5 closed end-to-end** via `06B` Step 39 Gates 0–7: arm
+(publish `60-tboot-sbloader.actions`), first-fire (`dnf reinstall systemd-boot-unsigned`, rc=0,
+two-chain co-fire), convergence proof (both chains), reboot validation (**runtime PCR 11 =
+`28E66CE2…C90F` byte-match, no LUKS passphrase, Secure Boot enabled, both chains converged**),
+closure snapshot `module5-b5-validated`. **Discipline-gate lift:** `dnf upgrade systemd*` and `dnf
+reinstall systemd-boot*` are now allowed under standard operator review (B.4 install + B.5
+arm/converge/reboot both validated); still gated are `dnf upgrade kernel*` (kernel-upgrade class)
+and blind `dnf update`/`dnf upgrade` without explicit package review. RE-PIN authoritative values
+adopted: B.2 baseline `47903d22…c220d` (was `6b032bd8…2a47`), booted UKI `1187c78c…b843` (was
+`0ac32c8b…6949`), secondary UKI `ac9c5090…b5e7`, systemd-boot signed loaders `4859f48a…4986`,
+PCR 11 unchanged `28E66CE2…C90F`. The ESP forensic-UKI residue (L.1) is unchanged by B.5 and
+remains deferred to Module 4 / B.2.5. Frozen UKI-signing authority unchanged: hook
+`a455444a…3b8c502f`. Cross-references added to `06B` Step 39, `00_Current_Project_State.md`, and
+`05_Update_Workflows_and_Key_Storage.md` §3.5.
 
-2026-05-25 (latest, post-B.4-Gate-1-evidence): Added L.2/L.3/L.4/L.5 and M.4 findings, discovered during the 2026-05-25 B.4 Gate 1 (rev-2) read-only preflight on VM 500. **L.2** (`/boot/efi/EFI/BOOT/BOOTX64.EFI` RPM-path-owned by `shim-x64-15.8-3.x86_64` despite content being our sbsigned systemd-boot — context-only; latent operational consequence is that `dnf reinstall shim-x64` or `dnf upgrade shim*` would restore Microsoft-CA-signed bytes at that path and break fallback-loadability under our enforced PK/KEK/db; fail-closed at firmware load, not a security compromise; new `dnf upgrade shim*` / `dnf reinstall shim*` discipline-gate row added to `00_Current_Project_State.md`; **explicitly NOT B.4 scope** — handed to Module 4A in `04A_Legacy_Residue_Cleanup_Gate.md`). **L.3** (`/EFI/systemd/` directory invariant for B.4 — hard form from day one: exactly `systemd-bootx64.efi`, db.crt-signed, signer_count=1, zero unexpected `.efi`; B.4-scope target; already met at Gate 1). **L.4** (`/EFI/BOOT/` directory invariant for the legacy-cleanup gate — pre-cleanup allowlist includes `fbx64.efi` (Microsoft-CA-signed shim fallback bridge, mtime 2024-03-19, ~87.8 KB; fail-closed under our PK/KEK/db; rename-with-suffix `.forensic-shim-fbx64` per B.1 `.loaderror` precedent at Module 4A), post-cleanup drops allowlist; **explicitly NOT B.4 scope**). **L.5** (NVRAM `Boot0008 Fedora` → `\EFI\fedora\shimx64.efi` dormant; `Linux Boot Manager` 0x0002 takes BootOrder priority; firmware fall-through fails closed under enforced PK/KEK/db; cleanup via `efibootmgr -B -b 0008` + optional rename of `/EFI/fedora/shimx64.efi`; **explicitly NOT B.4 scope**). **M.4** (packaging clarification: on Fedora 43 the `bootctl(1)` manpage at `/usr/share/man/man1/bootctl.1.gz` is owned by `systemd-udev`, not the main `systemd` package; documentation correction only). B.4 Gate 1 closure verdict: **PASS with findings (no stop condition triggered)**; the rev-3 source-side-signing architecture (independent B.4 chain; signing target `/usr/lib/systemd/boot/efi/systemd-bootx64.efi.signed`; ESP propagation via `bootctl --no-variables [install|update]` with Gate 2 picking the exact command; narrow `package_filter=systemd-boot-unsigned`; 5-entry manifest) stands unchanged. F1/F2/F4 reclassified as legacy-cleanup-scope (L.2/L.4/L.5 above) and explicitly removed from B.4 trigger surface and manifest — no `shim-x64` NEVRA in B.4 manifest, no filterless `.actions` rule. F3 (`systemd-boot-clear-sysfail.service` enabled + `systemd-bootctl@.service` / `systemd-bootctl.socket` / `systemd-boot-random-seed.service` flagged by cross-directory `bootctl` grep) remains the sole Gate 1 closure blocker — supplemental read-only probe (Blocks N.1–N.6) pending to capture each unit's `ExecStart` and determine whether any join `systemd-boot-update.service` on the Gate 2 mask-list. **Most-likely outcome**: none of the four units write ESP bootloader binaries → Gate 2 mask-list remains `systemd-boot-update.service` only. Cross-references added to `00_Current_Project_State.md` (discipline-gates table, Where to look for what, Next session priorities #3 + #5, Last update), `04A_Legacy_Residue_Cleanup_Gate.md` (new file), and the symptom-keyword index here (9 new rows). Frozen trust-chain shas unchanged: hook `a455444a…3b8c502f`, helper `4bef2239…20f4b`, predict `2d4985fa…aff160`, decider `35ad8733…73cdd`, production rule `dfbffe56…90d798`. Source-side `.efi.signed` path still absent (correct pre-B.4 state). Booted ESP UKI sha `0ac32c8b…6949` unchanged. Runtime PCR 11 = stored prediction `28E66CE2…C90F`.
+ 2026-05-25 (latest, post-B.4-Gate-1-evidence): Added L.2/L.3/L.4/L.5 and M.4 findings, discovered
+during the 2026-05-25 B.4 Gate 1 (rev-2) read-only preflight on VM 500. **L.2**
+(`/boot/efi/EFI/BOOT/BOOTX64.EFI` RPM-path-owned by `shim-x64-15.8-3.x86_64` despite content being
+our sbsigned systemd-boot: context-only; latent operational consequence is that `dnf reinstall
+shim-x64` or `dnf upgrade shim*` would restore Microsoft-CA-signed bytes at that path and break
+fallback-loadability under our enforced PK/KEK/db; fail-closed at firmware load, not a security
+compromise; new `dnf upgrade shim*` / `dnf reinstall shim*` discipline-gate row added to
+`00_Current_Project_State.md`; **explicitly NOT B.4 scope**: handed to Module 4A in
+`04A_Legacy_Residue_Cleanup_Gate.md`). **L.3** (`/EFI/systemd/` directory invariant for B.4: hard
+form from day one: exactly `systemd-bootx64.efi`, db.crt-signed, signer_count=1, zero unexpected
+`.efi`; B.4-scope target; already met at Gate 1). **L.4** (`/EFI/BOOT/` directory invariant for the
+legacy-cleanup gate: pre-cleanup allowlist includes `fbx64.efi` (Microsoft-CA-signed shim fallback
+bridge, mtime 2024-03-19, ~87.8 KB; fail-closed under our PK/KEK/db; rename-with-suffix
+`.forensic-shim-fbx64` per B.1 `.loaderror` precedent at Module 4A), post-cleanup drops allowlist;
+**explicitly NOT B.4 scope**). **L.5** (NVRAM `Boot0008 Fedora` → `\EFI\fedora\shimx64.efi`
+dormant; `Linux Boot Manager` 0x0002 takes BootOrder priority; firmware fall-through fails closed
+under enforced PK/KEK/db; cleanup via `efibootmgr -B -b 0008` + optional rename of
+`/EFI/fedora/shimx64.efi`; **explicitly NOT B.4 scope**). **M.4** (packaging clarification: on
+Fedora 43 the `bootctl(1)` manpage at `/usr/share/man/man1/bootctl.1.gz` is owned by
+`systemd-udev`, not the main `systemd` package; documentation correction only). B.4 Gate 1 closure
+verdict: **PASS with findings (no stop condition triggered)**; the rev-3 source-side-signing
+architecture (independent B.4 chain; signing target
+`/usr/lib/systemd/boot/efi/systemd-bootx64.efi.signed`; ESP propagation via `bootctl --no-variables
+[install|update]` with Gate 2 picking the exact command; narrow
+`package_filter=systemd-boot-unsigned`; 5-entry manifest) stands unchanged. F1/F2/F4 reclassified
+as legacy-cleanup-scope (L.2/L.4/L.5 above) and explicitly removed from B.4 trigger surface and
+manifest: no `shim-x64` NEVRA in B.4 manifest, no filterless `.actions` rule. F3
+(`systemd-boot-clear-sysfail.service` enabled + `systemd-bootctl@.service` /
+`systemd-bootctl.socket` / `systemd-boot-random-seed.service` flagged by cross-directory `bootctl`
+grep) remains the sole Gate 1 closure blocker: supplemental read-only probe (Blocks N.1–N.6)
+pending to capture each unit's `ExecStart` and determine whether any join
+`systemd-boot-update.service` on the Gate 2 mask-list. **Most-likely outcome**: none of the four
+units write ESP bootloader binaries → Gate 2 mask-list remains `systemd-boot-update.service`
+only. Cross-references added to `00_Current_Project_State.md` (discipline-gates table, Where to
+look for what, Next session priorities #3 + #5, Last update), `04A_Legacy_Residue_Cleanup_Gate.md`
+(new file), and the symptom-keyword index here (9 new rows). Frozen trust-chain shas unchanged:
+hook `a455444a…3b8c502f`, helper `4bef2239…20f4b`, predict `2d4985fa…aff160`, decider
+`35ad8733…73cdd`, production rule `dfbffe56…90d798`. Source-side `.efi.signed` path still
+absent (correct pre-B.4 state). Booted ESP UKI sha `0ac32c8b…6949` unchanged. Runtime PCR 11 =
+stored prediction `28E66CE2…C90F`.
 
-2026-05-25 (earlier, post-B.2.4-Gate-7): Added section L (ESP forensic UKI audit discipline) with one finding L.1, discovered during the 2026-05-25 `06B` Step 37 (B.2.4 Gate 7) read-only ESP audit. L.1: a `find /boot/efi/EFI/Linux -maxdepth 1 -type f -iname '*.efi'` inventory on the reference VM 500 system returned 5 total `.efi` files where only 2 are expected (booted-kernel + secondary-kernel MID-prefixed UKIs from `kernel-install` + the helper chain). The 3 unexpected files are pre-existing development-phase forensic artifacts from B.1 (pre-hook bare-kver ukify build, no `.pcrpkey`/`.pcrsig`) and B.3 (hook live-validation `test-tpm2initrd-pcrsig-*.efi` and `test-ukify-native-pcrsig-*.efi`, both with `.pcrpkey`/`.pcrsig` present). **All 3 unexpected files are `sbverify`-OK against `db.crt`, `signer_count = 1`, and VMA-sane** — they would be accepted by firmware if selected, so they are **firmware-loadable forensic UKIs**, not merely "menu clutter". For the bare-kver UKI: signed but lacks `.pcrpkey`/`.pcrsig`, so it is outside the validated forward-sealed path; would be expected to fail closed at LUKS unlock if selected (operator-visible passphrase prompt — fail-safe but symptomatically identical to a real Gate 6 failure). For the two `test-*` UKIs: they MAY unlock LUKS if their embedded `.pcrpkey` matches the live policy public key, but **this was not proven by the audit** (do not overclaim — proving it requires extracting `.pcrpkey` from each forensic UKI via read-only `objcopy --dump-section` against a tmpfs copy and comparing to `/etc/systemd/tpm2-pcr-public-key.pem`). The `.loaderror`-suffixed broken-objcopy UKI from B.1 is correctly excluded from systemd-boot enumeration by its suffix (validates the cleanup-via-suffix-rename pattern). **The reference-run audit recipe uses `-iname '*.efi'`** (case-insensitive) per ESP VFAT case-insensitive semantics; this also excludes `.loaderror`-suffixed files automatically. Per-file forensic record: `6.19.14-200.fc43.x86_64.efi` (bare-kver; 53059144 bytes; mtime 2026-05-07 14:59:48; sha `bcfa6403…e097`; sbverify OK; no `.pcrpkey`/`.pcrsig`); `test-tpm2initrd-pcrsig-6.19.14-200.fc43.x86_64.efi` (56429128 bytes; mtime 2026-05-08 03:10:44; sha `b94b273e…c4ca`; sbverify OK; `.pcrpkey`/`.pcrsig` present); `test-ukify-native-pcrsig-6.19.14-200.fc43.x86_64.efi` (53061192 bytes; mtime 2026-05-08 02:57:26; sha `56e0aa68…d277`; sbverify OK; `.pcrpkey`/`.pcrsig` present). **The audit was NOT a Gate 6 blocker**: `bootctl status` at Gate 4, 6A pre-reboot probe, and 6B post-reboot validation all confirmed Default Entry and Current Entry pointed to the MID-prefixed rebuilt 6.19.14 UKI; the forensic UKIs were menu-visible but not selected, and `LoaderEntryDefault` correctly persisted across the reboot. The finding's scope is "audit discipline + cleanup procedure" + "preventive pre-reboot ESP-inventory contract", not "active runtime bug". **Cleanup recipe deferred to a separate gate B.2.5** (ESP forensic UKI cleanup): take pre-cleanup snapshot `module5-b2-5-pre-cleanup` (parent `module5-b2-4-validated`), read-only re-audit, atomic rename each unexpected firmware-visible artifact to a non-enumerated forensic suffix (`.forensic-b1` for the bare-kver pre-hook B.1 artifact, `.forensic-b3` for the two B.3 development variants), no deletion (preserves forensic value while removing systemd-boot enumeration risk), verify `bootctl status` still points to MID-prefixed UKI, take post-cleanup snapshot `module5-b2-5-validated` (parent `module5-b2-5-pre-cleanup`); reboot not required unless cleanup touches current/default entries (which it must not). **Preventive ESP-inventory invariant added to the pre-reboot probe contract for future high-risk reboot gates (B.4 / B.5 / kernel-upgrade / Module 4)**: staged form until B.2.5 closes — enumerate `/boot/efi/EFI/Linux/*.efi` case-insensitively, require the two MID-prefixed expected UKIs, allow the three known forensic artifacts only, hard-fail on any additional unexpected `.efi`; after B.2.5 closes, the allowlist drops and the rule becomes the simpler hard form (zero unexpected `.efi` files outside the MID-prefixed allowlist). Quick-reference (forbidden-procedures + symptom-keyword index) extended with 3+10 new rows. Cross-references added to `06B` Step 37 (Gate 7 closure snapshot + ESP audit) and to `05_Update_Workflows_and_Key_Storage.md` §3.4 (operational-policy framing including the pre-reboot ESP-inventory invariant). **B.2.4 closed end-to-end via `06B` Steps 34–37**: Gates 1–3 (positive drift path pre-reboot 58/58 + snapshot + 43/43 PASS), Gate 4 (pre-reboot read-only cross-validation 36/36 PASS), Gate 5 (pre-reboot snapshot `module5-b2-4-pre-reboot`), Gates 6A–6B (operator-attested clean reboot with no LUKS passphrase prompt + post-reboot read-only validation 17/17 + 28/28 PASS with **runtime PCR 11 byte-matching stored prediction `28E66CE2…C90F`**), Gate 7 (closure snapshot `module5-b2-4-validated` + read-only ESP audit + staged DNF discipline lift). **Block B.2 full production flow: complete with staged DNF discipline.** **Staged DNF discipline lift applied at Gate 7**: non-systemd / non-kernel single-package DNF transactions (install/remove/reinstall/upgrade) including dracut-sensitive packages allowed under normal operator review; `dnf upgrade systemd*` (B.4 / B.5 scope), `dnf reinstall systemd-boot*` (B.4 scope), `dnf upgrade kernel*` (kernel-package class not yet validated), and blind `dnf update`/`dnf upgrade` without explicit package argument remain explicitly gated. Block B.2.5 (ESP forensic UKI cleanup) is the next scheduled block. Frozen trust-chain shas unchanged across B.2.4 closure: decider (`35ad8733…73cdd`), helper (`4bef2239…20f4b`), predict (`2d4985fa…aff160`), hook (`a455444a…3b8c502f`), production rule (`dfbffe56…90d798`).
+2026-05-25 (earlier, post-B.2.4-Gate-7): Added section L (ESP forensic UKI audit discipline) with
+one finding L.1, discovered during the 2026-05-25 `06B` Step 37 (B.2.4 Gate 7) read-only ESP audit.
+L.1: a `find /boot/efi/EFI/Linux -maxdepth 1 -type f -iname '*.efi'` inventory on the reference VM
+500 system returned 5 total `.efi` files where only 2 are expected (booted-kernel +
+secondary-kernel MID-prefixed UKIs from `kernel-install` + the helper chain). The 3 unexpected
+files are pre-existing development-phase forensic artifacts from B.1 (pre-hook bare-kver ukify
+build, no `.pcrpkey`/`.pcrsig`) and B.3 (hook live-validation `test-tpm2initrd-pcrsig-*.efi` and
+`test-ukify-native-pcrsig-*.efi`, both with `.pcrpkey`/`.pcrsig` present). **All 3 unexpected files
+are `sbverify`-OK against `db.crt`, `signer_count = 1`, and VMA-sane**: they would be accepted by
+firmware if selected, so they are **firmware-loadable forensic UKIs**, not merely "menu clutter".
+For the bare-kver UKI: signed but lacks `.pcrpkey`/`.pcrsig`, so it is outside the validated
+forward-sealed path; would be expected to fail closed at LUKS unlock if selected (operator-visible
+passphrase prompt: fail-safe but symptomatically identical to a real Gate 6 failure). For the two
+`test-*` UKIs: they MAY unlock LUKS if their embedded `.pcrpkey` matches the live policy public
+key, but **this was not proven by the audit** (do not overclaim: proving it requires extracting
+`.pcrpkey` from each forensic UKI via read-only `objcopy --dump-section` against a tmpfs copy and
+comparing to `/etc/systemd/tpm2-pcr-public-key.pem`). The `.loaderror`-suffixed broken-objcopy UKI
+from B.1 is correctly excluded from systemd-boot enumeration by its suffix (validates the
+cleanup-via-suffix-rename pattern). **The reference-run audit recipe uses `-iname '*.efi'`**
+(case-insensitive) per ESP VFAT case-insensitive semantics; this also excludes
+`.loaderror`-suffixed files automatically. Per-file forensic record: `6.19.14-200.fc43.x86_64.efi`
+(bare-kver; 53059144 bytes; mtime 2026-05-07 14:59:48; sha `bcfa6403…e097`; sbverify OK; no
+`.pcrpkey`/`.pcrsig`); `test-tpm2initrd-pcrsig-6.19.14-200.fc43.x86_64.efi` (56429128 bytes; mtime
+2026-05-08 03:10:44; sha `b94b273e…c4ca`; sbverify OK; `.pcrpkey`/`.pcrsig` present);
+`test-ukify-native-pcrsig-6.19.14-200.fc43.x86_64.efi` (53061192 bytes; mtime 2026-05-08 02:57:26;
+sha `56e0aa68…d277`; sbverify OK; `.pcrpkey`/`.pcrsig` present). **The audit was NOT a Gate 6
+blocker**: `bootctl status` at Gate 4, 6A pre-reboot probe, and 6B post-reboot validation all
+confirmed Default Entry and Current Entry pointed to the MID-prefixed rebuilt 6.19.14 UKI; the
+forensic UKIs were menu-visible but not selected, and `LoaderEntryDefault` correctly persisted
+across the reboot. The finding's scope is "audit discipline + cleanup procedure" + "preventive
+pre-reboot ESP-inventory contract", not "active runtime bug". **Cleanup recipe deferred to a
+separate gate B.2.5** (ESP forensic UKI cleanup): take pre-cleanup snapshot
+`module5-b2-5-pre-cleanup` (parent `module5-b2-4-validated`), read-only re-audit, atomic rename
+each unexpected firmware-visible artifact to a non-enumerated forensic suffix (`.forensic-b1` for
+the bare-kver pre-hook B.1 artifact, `.forensic-b3` for the two B.3 development variants), no
+deletion (preserves forensic value while removing systemd-boot enumeration risk), verify `bootctl
+status` still points to MID-prefixed UKI, take post-cleanup snapshot `module5-b2-5-validated`
+(parent `module5-b2-5-pre-cleanup`); reboot not required unless cleanup touches current/default
+entries (which it must not). **Preventive ESP-inventory invariant added to the pre-reboot probe
+contract for future high-risk reboot gates (B.4 / B.5 / kernel-upgrade / Module 4)**: staged form
+until B.2.5 closes: enumerate `/boot/efi/EFI/Linux/*.efi` case-insensitively, require the two
+MID-prefixed expected UKIs, allow the three known forensic artifacts only, hard-fail on any
+additional unexpected `.efi`; after B.2.5 closes, the allowlist drops and the rule becomes the
+simpler hard form (zero unexpected `.efi` files outside the MID-prefixed allowlist).
+Quick-reference (forbidden-procedures + symptom-keyword index) extended with 3+10 new rows.
+Cross-references added to `06B` Step 37 (Gate 7 closure snapshot + ESP audit) and to
+`05_Update_Workflows_and_Key_Storage.md` §3.4 (operational-policy framing including the pre-reboot
+ESP-inventory invariant). **B.2.4 closed end-to-end via `06B` Steps 34–37**: Gates 1–3
+(positive drift path pre-reboot 58/58 + snapshot + 43/43 PASS), Gate 4 (pre-reboot read-only
+cross-validation 36/36 PASS), Gate 5 (pre-reboot snapshot `module5-b2-4-pre-reboot`), Gates 6A–6B
+(operator-attested clean reboot with no LUKS passphrase prompt + post-reboot read-only validation
+17/17 + 28/28 PASS with **runtime PCR 11 byte-matching stored prediction `28E66CE2…C90F`**), Gate
+7 (closure snapshot `module5-b2-4-validated` + read-only ESP audit + staged DNF discipline lift).
+**Block B.2 full production flow: complete with staged DNF discipline.** **Staged DNF discipline
+lift applied at Gate 7**: non-systemd / non-kernel single-package DNF transactions
+(install/remove/reinstall/upgrade) including dracut-sensitive packages allowed under normal
+operator review; `dnf upgrade systemd*` (B.4 / B.5 scope), `dnf reinstall systemd-boot*` (B.4
+scope), `dnf upgrade kernel*` (kernel-package class not yet validated), and blind `dnf update`/`dnf
+upgrade` without explicit package argument remain explicitly gated. Block B.2.5 (ESP forensic UKI
+cleanup) is the next scheduled block. Frozen trust-chain shas unchanged across B.2.4 closure:
+decider (`35ad8733…73cdd`), helper (`4bef2239…20f4b`), predict (`2d4985fa…aff160`), hook
+(`a455444a…3b8c502f`), production rule (`dfbffe56…90d798`).
 
-2026-05-28: Added section N (Block B.4 systemd-boot-signing findings) with six findings N.1–N.6, discovered during the 2026-05-28 `06B` Step 38 (B.4 install/publish gate) execution session. N.1: `bootctl --no-variables update` skips a re-signed same-version binary (version-identical, byte-different; rc=1 `"same boot loader version in place already"`), so the loader propagation primitive must be `bootctl --no-variables install` (force-copy to `/EFI/systemd/` + `/EFI/BOOT/BOOTX64.EFI`); the one open caveat (does `install` pick `.efi.signed` over the unsigned source) is closed at helper runtime by a mandatory fail-closed loopback both-target checkpoint, live-exercised in B.5. N.2: read-back/probe harness hygiene — never use `set -u` at the interactive shell top level (use `bash <<'EOF'`), `set +H` before `!`-containing headers, avoid `${` and forbidden-token literals (`bootctl`, etc.) on any non-`#` line **including heredoc help prose** (the dumb-but-trustworthy forbidden-token scan only excludes `#`-prefixed lines), and make presence checks multi-line-aware; continuation of the H.4/I.4/J.1–J.3 harness-engineering class. N.3: `libdnf5-actions(8)` rule layout is `callback:filter:direction:options:command`; `direction=in` enumerates {downgrade,install,reinstall,upgrade}, `reinstall` matches both `in` and `out` (internal remove+install), per-package command dedup is guaranteed — the B.4 rule uses `direction=in` with `package_filter=systemd-boot-unsigned`. N.4: `dnf reinstall --cacheonly --assumeno systemd-boot-unsigned` resolves `Reinstalling: 1 package` then aborts rc=1 (K.2 refusal semantics) — a safe transaction-preview confirming the B.5 first-fire driver; NEVRA `systemd-boot-unsigned-258.7-1.fc43.x86_64` is reinstall-eligible in `updates`. N.5: of the four `bootctl`-referencing units, only `systemd-boot-update.service` installs/updates the loader binary; `systemd-boot-random-seed.service` writes only `/boot/efi/loader/random-seed` (out of the B.4 boundary, do NOT mask), and `clear-sysfail`/`bootctl@`/`bootctl.socket` never write loader binaries — B.4 mask-list = `systemd-boot-update.service` only. N.6: the B.4 decider no-op (D-1) requires baseline-equality AND converged-shape (`src_signed`≠ABSENT and both ESP copies == `src_signed`); baseline-equality alone is insufficient — proven live by the intentionally non-converged primed baseline producing `drift (equal=1 shape=0)` post-prime (never `unchanged`); baseline-absent normal mode is FAIL CLOSED. All six findings are environmental, design-lock, or harness-engineering observations; none are helper-source or decider-source bugs. The B.4 helper (`1a411e85…f18f`), decider (`3ccef59c…f8e7`), and rule (`2e83fcfc…8274`) artifacts are unchanged. These findings were referred to informally as `K.4`–`K.7`/`M.2` during the working session; assigned to section N on catalog entry to avoid collision with the existing K (B.2.4) and M sections. Quick-reference and symptom-keyword index extended. Cross-references added to `06B` Step 38. **B.4 install/publish gate closed; chain installed + primed (non-converged) + masked, UNARMED (`60-` rule unpublished, `.efi.signed` absent, helper never fired); publish + first-fire deferred to B.5.** ChatGPT ratification of the N findings + the D-1 design-lock note is still pending.
+2026-05-28: Added section N (Block B.4 systemd-boot-signing findings) with six findings N.1–N.6,
+discovered during the 2026-05-28 `06B` Step 38 (B.4 install/publish gate) execution session. N.1:
+`bootctl --no-variables update` skips a re-signed same-version binary (version-identical,
+byte-different; rc=1 `"same boot loader version in place already"`), so the loader propagation
+primitive must be `bootctl --no-variables install` (force-copy to `/EFI/systemd/` +
+`/EFI/BOOT/BOOTX64.EFI`); the one open caveat (does `install` pick `.efi.signed` over the unsigned
+source) is closed at helper runtime by a mandatory fail-closed loopback both-target checkpoint,
+live-exercised in B.5. N.2: read-back/probe harness hygiene: never use `set -u` at the interactive
+shell top level (use `bash <<'EOF'`), `set +H` before `!`-containing headers, avoid `${` and
+forbidden-token literals (`bootctl`, etc.) on any non-`#` line **including heredoc help prose**
+(the dumb-but-trustworthy forbidden-token scan only excludes `#`-prefixed lines), and make presence
+checks multi-line-aware; continuation of the H.4/I.4/J.1–J.3 harness-engineering class. N.3:
+`libdnf5-actions(8)` rule layout is `callback:filter:direction:options:command`; `direction=in`
+enumerates {downgrade,install,reinstall,upgrade}, `reinstall` matches both `in` and `out` (internal
+remove+install), per-package command dedup is guaranteed: the B.4 rule uses `direction=in` with
+`package_filter=systemd-boot-unsigned`. N.4: `dnf reinstall --cacheonly --assumeno
+systemd-boot-unsigned` resolves `Reinstalling: 1 package` then aborts rc=1 (K.2 refusal semantics):
+a safe transaction-preview confirming the B.5 first-fire driver; NEVRA
+`systemd-boot-unsigned-258.7-1.fc43.x86_64` is reinstall-eligible in `updates`. N.5: of the four
+`bootctl`-referencing units, only `systemd-boot-update.service` installs/updates the loader binary;
+`systemd-boot-random-seed.service` writes only `/boot/efi/loader/random-seed` (out of the B.4
+boundary, do NOT mask), and `clear-sysfail`/`bootctl@`/`bootctl.socket` never write loader
+binaries: B.4 mask-list = `systemd-boot-update.service` only. N.6: the B.4 decider no-op (D-1)
+requires baseline-equality AND converged-shape (`src_signed`≠ABSENT and both ESP copies ==
+`src_signed`); baseline-equality alone is insufficient: proven live by the intentionally
+non-converged primed baseline producing `drift (equal=1 shape=0)` post-prime (never `unchanged`);
+baseline-absent normal mode is FAIL CLOSED. All six findings are environmental, design-lock, or
+harness-engineering observations; none are helper-source or decider-source bugs. The B.4 helper
+(`1a411e85…f18f`), decider (`3ccef59c…f8e7`), and rule (`2e83fcfc…8274`) artifacts are
+unchanged. These findings were referred to informally as `K.4`–`K.7`/`M.2` during the working
+session; assigned to section N on catalog entry to avoid collision with the existing K (B.2.4) and
+M sections. Quick-reference and symptom-keyword index extended. Cross-references added to `06B`
+Step 38. **B.4 install/publish gate closed; chain installed + primed (non-converged) + masked,
+UNARMED (`60-` rule unpublished, `.efi.signed` absent, helper never fired); publish + first-fire
+deferred to B.5.** The N findings and D-1 design-lock note were pending review at the time of this
+entry and were subsequently confirmed during B.5 validation.
 
-2026-05-25 (post-B.2.4-Gate-3): Added section K (B.2.4 Gates 1–3 findings) with three findings K.1–K.3, discovered during the 2026-05-25 `06B` Step 34 execution session. K.1: the decider logs its production code path as `mode=normal` and the helper logs its production code path as `mode=production`; the two refer to the same end-to-end execution but use different vocabulary (decider was authored later in B.2.3 with `prime`/`dry-run`/`debug-print`/`self-test` siblings; helper was authored earlier in B.2.2 with `dry-run`/`self-test` siblings). The rev-3 Gate 3 reference-run harness asserted helper start with `mode=normal` and FAILed at assertion 411 even though the mutation completed correctly. Body includes the full canonical post-hoc continuation verifier (43/43 assertions) that closed Gate 3 on 2026-05-25 against the now-mutated live state; this verifier is the canonical recovery path for FAIL 411 specifically. K.2: DNF5 `dnf install --assumeno <pkg>` on Fedora 43 (`libdnf5-plugin-actions-5.2.18.0-3.fc43.x86_64`) returns rc=1 with the documented refusal phrase `Operation aborted by the user.`; the rc=1 is the documented refusal exit, not a resolution failure. Three-part harness check is required (rc ∈ {0,1}, refusal phrase present in output, decider journal silent over the assumeno window) to safely accept this as a transaction-preview signal. K.3: the decider's baseline manifest sha and the stored PCR 11 prediction value advance on different axes — baseline tracks the on-disk 14-category boot-input file-content manifest, PCR 11 value tracks the freshly-rebuilt booted UKI's measured-content sections (`.linux`, `.initrd`, `.cmdline`, `.osrel`, `.uname`, `.sbat`, `.pcrpkey`) as computed by `systemd-measure calculate`. The (a)/(b)/(c)/(d) outcome table documents all four observable combinations: (a) both advance = strong-closure path; (b) baseline advances, PCR 11 unchanged = helper-path-only closure; (c) baseline unchanged = no-drift path; (d) baseline unchanged but PCR 11 advances = anomalous. The 2026-05-25 Gate 3 reference run produced outcome (a) — dracut autodetect pulled the new `dracut-network` module's measured content into the host-only initramfs, so the new UKI's `.initrd` section actually differs and the predictor's output advanced `A03EB49C…35DD` → `28E66CE2…C90F`. The strong-closure path was subsequently confirmed by Gate 6B post-reboot validation on 2026-05-25 — runtime PCR 11 from `/sys/class/tpm/tpm0/pcr-sha256/11` byte-matched the stored prediction `28E66CE2…C90F` after a real `systemctl reboot` (28/28 PASS); see the top entry above for full Gate 6A–6B–7 closure detail. All three findings are environmental or harness-engineering observations; none are decider-source, helper-source, or predictor-source bugs. The frozen shas of decider (`35ad8733…73cdd`), helper (`4bef2239…20f4b`), predict (`2d4985fa…aff160`), hook (`a455444a…3b8c502f`), and production rule (`dfbffe56…90d798`) are unchanged. Quick-reference (conditional/clarification) and symptom-keyword index extended with 7+10 new rows. Cross-references added to `06B` Step 34 (Gates 1–3). **B.2.4 Gates 1–3 closed end-to-end via `06B` Step 34** (Gate 1 58/58 PASS, Gate 2 snapshot-only, Gate 3 closed via the K.1 continuation verifier at 43/43 PASS); B.2.4 Gates 4–7 closed via `06B` Steps 35–37 (see top entry above).
+2026-05-25 (post-B.2.4-Gate-3): Added section K (B.2.4 Gates 1–3 findings) with three findings
+K.1–K.3, discovered during the 2026-05-25 `06B` Step 34 execution session. K.1: the decider logs
+its production code path as `mode=normal` and the helper logs its production code path as
+`mode=production`; the two refer to the same end-to-end execution but use different vocabulary
+(decider was authored later in B.2.3 with `prime`/`dry-run`/`debug-print`/`self-test` siblings;
+helper was authored earlier in B.2.2 with `dry-run`/`self-test` siblings). The rev-3 Gate 3
+reference-run harness asserted helper start with `mode=normal` and FAILed at assertion 411 even
+though the mutation completed correctly. Body includes the full canonical post-hoc continuation
+verifier (43/43 assertions) that closed Gate 3 on 2026-05-25 against the now-mutated live state;
+this verifier is the canonical recovery path for FAIL 411 specifically. K.2: DNF5 `dnf install
+--assumeno <pkg>` on Fedora 43 (`libdnf5-plugin-actions-5.2.18.0-3.fc43.x86_64`) returns rc=1 with
+the documented refusal phrase `Operation aborted by the user.`; the rc=1 is the documented refusal
+exit, not a resolution failure. Three-part harness check is required (rc ∈ {0,1}, refusal phrase
+present in output, decider journal silent over the assumeno window) to safely accept this as a
+transaction-preview signal. K.3: the decider's baseline manifest sha and the stored PCR 11
+prediction value advance on different axes: baseline tracks the on-disk 14-category boot-input
+file-content manifest, PCR 11 value tracks the freshly-rebuilt booted UKI's measured-content
+sections (`.linux`, `.initrd`, `.cmdline`, `.osrel`, `.uname`, `.sbat`, `.pcrpkey`) as computed by
+`systemd-measure calculate`. The (a)/(b)/(c)/(d) outcome table documents all four observable
+combinations: (a) both advance = strong-closure path; (b) baseline advances, PCR 11 unchanged =
+helper-path-only closure; (c) baseline unchanged = no-drift path; (d) baseline unchanged but PCR 11
+advances = anomalous. The 2026-05-25 Gate 3 reference run produced outcome (a): dracut autodetect
+pulled the new `dracut-network` module's measured content into the host-only initramfs, so the new
+UKI's `.initrd` section actually differs and the predictor's output advanced `A03EB49C…35DD` →
+`28E66CE2…C90F`. The strong-closure path was subsequently confirmed by Gate 6B post-reboot
+validation on 2026-05-25: runtime PCR 11 from `/sys/class/tpm/tpm0/pcr-sha256/11` byte-matched the
+stored prediction `28E66CE2…C90F` after a real `systemctl reboot` (28/28 PASS); see the top entry
+above for full Gate 6A–6B–7 closure detail. All three findings are environmental or
+harness-engineering observations; none are decider-source, helper-source, or predictor-source bugs.
+The frozen shas of decider (`35ad8733…73cdd`), helper (`4bef2239…20f4b`), predict
+(`2d4985fa…aff160`), hook (`a455444a…3b8c502f`), and production rule (`dfbffe56…90d798`) are
+unchanged. Quick-reference (conditional/clarification) and symptom-keyword index extended with 7+10
+new rows. Cross-references added to `06B` Step 34 (Gates 1–3). **B.2.4 Gates 1–3 closed
+end-to-end via `06B` Step 34** (Gate 1 58/58 PASS, Gate 2 snapshot-only, Gate 3 closed via the K.1
+continuation verifier at 43/43 PASS); B.2.4 Gates 4–7 closed via `06B` Steps 35–37 (see top
+entry above).
 
-2026-05-25 (earlier): Added section J (Gate 4–7 environment and harness findings) with three findings J.1–J.3, discovered during the 2026-05-25 B.2.3 Gates 4–7 execution session (production `.actions` rule first live, two real DNF transactions invoked the decider end-to-end). J.1: `/var/log/dnf5.log` does not record `Loaded libdnf plugin` entries in this Fedora 43 environment; journald evidence under tag `tboot-dnf-posttrans` is authoritative; the Gate 6A canonical verifier was corrected to remove all `dnf5.log` assertions. J.2: `date -Iseconds` emits TZ offset as `+02:00` while `dnf5.log` writes `+0200`; lexicographic timestamp comparison against `dnf5.log` is fragile; `journalctl --since` (systemd's time parser handles both forms natively) is the correct replacement. J.3: lock-path invariants must be "not actively held" via non-blocking `flock <> -n` (with symlink rejection and non-truncating read/write fd open), not "path absent" — `flock(1)` releases on fd close without unlinking, and the persistent lock file is the standard idiom across `/run/tboot-dnf-posttrans.lock` and `/run/tboot-dnf-helper.lock`. All three findings are environmental or harness-engineering observations; none are decider-source bugs. The decider's frozen sha (`35ad8733…73cdd`) is unchanged. Quick-reference and symptom-keyword index extended with 4+5 new rows. Cross-references added to `06B` Step 33 (Gates 4–7). **B.2.3 closed end-to-end** with closure snapshot `module5-b2-3-validated`; B.2.4 (live drift-detection through a real dracut-sensitive transaction) pending; blind `dnf update` still blocked; `dnf upgrade systemd*` still separately blocked.
+2026-05-25 (earlier): Added section J (Gate 4–7 environment and harness findings) with three
+findings J.1–J.3, discovered during the 2026-05-25 B.2.3 Gates 4–7 execution session
+(production `.actions` rule first live, two real DNF transactions invoked the decider end-to-end).
+J.1: `/var/log/dnf5.log` does not record `Loaded libdnf plugin` entries in this Fedora 43
+environment; journald evidence under tag `tboot-dnf-posttrans` is authoritative; the Gate 6A
+canonical verifier was corrected to remove all `dnf5.log` assertions. J.2: `date -Iseconds` emits
+TZ offset as `+02:00` while `dnf5.log` writes `+0200`; lexicographic timestamp comparison against
+`dnf5.log` is fragile; `journalctl --since` (systemd's time parser handles both forms natively) is
+the correct replacement. J.3: lock-path invariants must be "not actively held" via non-blocking
+`flock <> -n` (with symlink rejection and non-truncating read/write fd open), not "path absent":
+`flock(1)` releases on fd close without unlinking, and the persistent lock file is the standard
+idiom across `/run/tboot-dnf-posttrans.lock` and `/run/tboot-dnf-helper.lock`. All three findings
+are environmental or harness-engineering observations; none are decider-source bugs. The decider's
+frozen sha (`35ad8733…73cdd`) is unchanged. Quick-reference and symptom-keyword index extended
+with 4+5 new rows. Cross-references added to `06B` Step 33 (Gates 4–7). **B.2.3 closed
+end-to-end** with closure snapshot `module5-b2-3-validated`; B.2.4 (live drift-detection through a
+real dracut-sensitive transaction) pending; blind `dnf update` still blocked; `dnf upgrade
+systemd*` still separately blocked.
 
-2026-05-24 (latest): Added section I (Gate 3 environment and harness findings) with seven findings I.1–I.7, discovered during the 2026-05-24 B.2.3 Gate 3 (sub-gates 3.0–3.8) execution sessions. I.1: `qm listsnapshot` output prefixes snapshot names with tree glyphs; strip prefixes before column-1 awk match; cosmetic PVE `Wide character in printf` warnings are not parse failures. I.2: `bootctl get-default` returns empty on this Fedora 43 VM despite `bootctl status` reporting the correct Default Entry; parse `bootctl status` instead. I.3: Fedora 43 UsrMerge layout makes `/usr/local/sbin` a symlink to `bin`; install-target safety checks must `readlink -f` and assert resolved literal == `/usr/local/bin`, then atomic-publish (`mktemp` + `install` + `mv -T`) inside the resolved real directory. I.4: `journalctl -t TAG --since X` prints `-- No entries --` on stdout when empty; use `journalctl -q` for tag-silence assertions. I.5: `--self-test` mode does NOT emit `ok: helper present and executable`; the helper-presence branch in self-test is warn-only; verify helper presence via frozen-sha invariant instead. I.6: do not bundle a re-prime refusal probe inside the clean Gate 3.6 baseline-prime gate; the deliberate err: line breaks the gate-hygiene property. I.7: in Gate 3.7, run `--debug-print` exactly once and capture rc via a subshell + tempfile pattern (`( CMD >out 2>err ; echo $? >rc_file )`); do not mask exit codes with `|| true` inside command substitution. All seven findings are environmental or harness-engineering observations; none are decider-source bugs. Quick-reference and symptom-keyword index extended with 7+10 new rows. Cross-references added to `06B` Step 32 (Gates 3.0–3.8).
+2026-05-24 (latest): Added section I (Gate 3 environment and harness findings) with seven findings
+I.1–I.7, discovered during the 2026-05-24 B.2.3 Gate 3 (sub-gates 3.0–3.8) execution sessions.
+I.1: `qm listsnapshot` output prefixes snapshot names with tree glyphs; strip prefixes before
+column-1 awk match; cosmetic PVE `Wide character in printf` warnings are not parse failures. I.2:
+`bootctl get-default` returns empty on this Fedora 43 VM despite `bootctl status` reporting the
+correct Default Entry; parse `bootctl status` instead. I.3: Fedora 43 UsrMerge layout makes
+`/usr/local/sbin` a symlink to `bin`; install-target safety checks must `readlink -f` and assert
+resolved literal == `/usr/local/bin`, then atomic-publish (`mktemp` + `install` + `mv -T`) inside
+the resolved real directory. I.4: `journalctl -t TAG --since X` prints `-- No entries --` on stdout
+when empty; use `journalctl -q` for tag-silence assertions. I.5: `--self-test` mode does NOT emit
+`ok: helper present and executable`; the helper-presence branch in self-test is warn-only; verify
+helper presence via frozen-sha invariant instead. I.6: do not bundle a re-prime refusal probe
+inside the clean Gate 3.6 baseline-prime gate; the deliberate err: line breaks the gate-hygiene
+property. I.7: in Gate 3.7, run `--debug-print` exactly once and capture rc via a subshell +
+tempfile pattern (`( CMD >out 2>err ; echo $? >rc_file )`); do not mask exit codes with `|| true`
+inside command substitution. All seven findings are environmental or harness-engineering
+observations; none are decider-source bugs. Quick-reference and symptom-keyword index extended with
+7+10 new rows. Cross-references added to `06B` Step 32 (Gates 3.0–3.8).
 
-2026-05-24: Added finding H.4 (external audit-harness token-boundary regex must match the in-script self-scan; do not patch staged sources for harness false positives). Discovered during `06B` Step 31 (B.2.3 Gate 2 — staged decider read-back validation): the initial external Step 6 trust-boundary scanner fired on line 532 of the staged decider (`local c="08-cryptsetup-tooling"`) because it used the laxer `\<TOKEN\>` GNU awk word-boundary form, which treats `-` as a word boundary. The in-script `_self_test_trust_boundary` already used the Deviation D regex `(^|[^A-Za-z0-9_-])TOKEN($|[^A-Za-z0-9_-])` (hyphen inside the identifier class) and did not flag the line. Resolution: harmonize the external harness with Deviation D; do not mutate the staged decider source. Staged sha256 `35ad8733f190483f1bd6d071d2aa7cb8b1549286f9040086182443c584473cdd` unchanged between failing and passing runs. Quick-reference and symptom-keyword index extended. Cross-reference added to `06B` Step 31.
+2026-05-24: Added finding H.4 (external audit-harness token-boundary regex must match the in-script
+self-scan; do not patch staged sources for harness false positives). Discovered during `06B` Step
+31 (B.2.3 Gate 2: staged decider read-back validation): the initial external Step 6 trust-boundary
+scanner fired on line 532 of the staged decider (`local c="08-cryptsetup-tooling"`) because it used
+the laxer `\<TOKEN\>` GNU awk word-boundary form, which treats `-` as a word boundary. The
+in-script `_self_test_trust_boundary` already used the Deviation D regex
+`(^|[^A-Za-z0-9_-])TOKEN($|[^A-Za-z0-9_-])` (hyphen inside the identifier class) and did not flag
+the line. Resolution: harmonize the external harness with Deviation D; do not mutate the staged
+decider source. Staged sha256 `35ad8733f190483f1bd6d071d2aa7cb8b1549286f9040086182443c584473cdd`
+unchanged between failing and passing runs. Quick-reference and symptom-keyword index extended.
+Cross-reference added to `06B` Step 31.
 
-2026-05-22 (latest): Added finding E.3 (PCR 11 value invariance across UKI regeneration when measured-content inputs are unchanged). Discovered during `06B` Step 30 (Block B.2.2) execution: the booted-kernel UKI was rebuilt with a new sha (`75b9cf90…d94a` → `b6002e66…7943`) but the stored PCR 11 value was unchanged (`A03EB49C…35DD`), because dracut produced bit-identical initramfs content from identical inputs. Quick-reference table and symptom-keyword index extended. Cross-reference added to `06B` Step 30.
+2026-05-22 (latest): Added finding E.3 (PCR 11 value invariance across UKI regeneration when
+measured-content inputs are unchanged). Discovered during `06B` Step 30 (Block B.2.2) execution:
+the booted-kernel UKI was rebuilt with a new sha (`75b9cf90…d94a` → `b6002e66…7943`) but the
+stored PCR 11 value was unchanged (`A03EB49C…35DD`), because dracut produced bit-identical
+initramfs content from identical inputs. Quick-reference table and symptom-keyword index extended.
+Cross-reference added to `06B` Step 30.
 
-2026-05-21 (latest): Added section H (DNF5 plugin layer and trigger mechanics) with H.1 (dnf5 has no runtime verbosity flag), H.2 (`dnf reinstall` requires installed NEVRA in repos), H.3 (substring grep of `boot` matches `inbound` header). Findings discovered during `06B` Steps 27–28 (Block B.2.1) execution. Quick-reference tables and symptom-keyword index extended. Cross-references added to `06B` Steps 27 and 28.
+2026-05-21 (latest): Added section H (DNF5 plugin layer and trigger mechanics) with H.1 (dnf5 has
+no runtime verbosity flag), H.2 (`dnf reinstall` requires installed NEVRA in repos), H.3 (substring
+grep of `boot` matches `inbound` header). Findings discovered during `06B` Steps 27–28 (Block
+B.2.1) execution. Quick-reference tables and symptom-keyword index extended. Cross-references added
+to `06B` Steps 27 and 28.
 
-2026-05-21: Added F.5 (heredoc stdin consumption breaks interactive prompts), G.1 (systemd-cryptenroll PCR list shape and signature-validation phase mismatch), G.2 (kernel-install add does not refresh /boot/initramfs under UKI layout). New category G ("LUKS2 and systemd-cryptenroll") created. Quick-reference tables and symptom-keyword index extended. Findings cross-referenced from `06B` Steps 20–26 (Module 3).
+2026-05-21: Added F.5 (heredoc stdin consumption breaks interactive prompts), G.1
+(systemd-cryptenroll PCR list shape and signature-validation phase mismatch), G.2 (kernel-install
+add does not refresh /boot/initramfs under UKI layout). New category G ("LUKS2 and
+systemd-cryptenroll") created. Quick-reference tables and symptom-keyword index extended. Findings
+cross-referenced from `06B` Steps 20–26 (Module 3).
 
-2026-05-08: produced as the merged successor to the earlier split between `06F_Diagnostic_Findings_Catalog.md` and `06X_Deprecated_Procedures.md`. All 16 findings preserved. Forbidden-procedure rules from `06X` absorbed as `Verdict:` fields and operational consequences. Companion to `06B_Golden_Path_Rebuild_Runbook.md` and `00_Current_Project_State.md`.
+2026-05-08: produced as the merged successor to the earlier split between
+`06F_Diagnostic_Findings_Catalog.md` and `06X_Deprecated_Procedures.md`. All 16 findings preserved.
+Forbidden-procedure rules from `06X` absorbed as `Verdict:` fields and operational consequences.
+Companion to `06B_Golden_Path_Rebuild_Runbook.md` and `00_Current_Project_State.md`.

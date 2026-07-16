@@ -11,7 +11,7 @@ genuine measurements from the validated build and are public values by design.
 > The blocks are the actual console output; long key and blob dumps are shortened
 > with `[...]`. This appendix is a frozen snapshot of the state at capture: a later
 > full `dnf update` including a kernel version upgrade (2026-06-19) advanced PCR 11
-> beyond the value shown here without breaking TPM2 unlock — see the README.
+> beyond the value shown here without breaking TPM2 unlock: see the README.
 
 ## 1. Validated state at capture
 

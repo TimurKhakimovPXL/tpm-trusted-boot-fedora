@@ -5,7 +5,7 @@ original lab identifiers. PCR values, policy-key digests and file hashes are
 genuine measurements from the validated build and are public values by design.
 -->
 
-# Appendix 09: Forensic Artifact — objcopy-Corrupted UKI
+# Appendix 09: Forensic Artifact: objcopy-Corrupted UKI
 
 > Reconstructed from the project logs of 8 May 2026. Companion to finding B.1 in
 > `06F_Diagnostic_Findings_Catalog.md`.

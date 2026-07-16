@@ -11,13 +11,13 @@
 #     kernel under /lib/modules/*/vmlinuz (per 06F finding G.2).
 #   - Invoke `kernel-install add ${KVER} /lib/modules/${KVER}/vmlinuz` for
 #     each kernel. This is the entry point that fires the validated
-#     /etc/kernel/install.d/80-tpm2-sign.install hook — the only UKI signing
+#     /etc/kernel/install.d/80-tpm2-sign.install hook: the only UKI signing
 #     authority in this project.
 #   - Refresh /root/tboot-lab/state/expected-pcr11-after-hook-uki.txt by
 #     shelling out to the sibling /usr/local/sbin/tboot-predict-pcr11
 #     against the currently-booted kernel's MID-prefixed UKI on the ESP.
 #   - Log everything to journald under tag `tboot-dnf-helper`.
-#   - Write atomic state markers under /var/lib/tboot-dnf-helper/ — but
+#   - Write atomic state markers under /var/lib/tboot-dnf-helper/, but
 #     only when that directory exists and passes safety checks.
 #
 # Trust-boundary preservation. This helper is NOT a signing authority. It
@@ -56,7 +56,7 @@ set -euo pipefail
 # Constants
 # ============================================================================
 
-readonly HELPER_VERSION="0.1.0-draft-B.2.2-pre-validation"
+readonly HELPER_VERSION="1.0.0"
 readonly TAG="tboot-dnf-helper"
 
 # Lock and state
@@ -73,7 +73,7 @@ readonly STATE_DIR_OWNER="root:root"
 # Signing-authority pin (matches 00_Current_Project_State.md invariant table).
 # Drift here means the only signing authority has been edited; refuse to run.
 readonly SIGNING_HOOK="/etc/kernel/install.d/80-tpm2-sign.install"
-readonly SIGNING_HOOK_SHA="a455444a54f5be265f822d85f4681cba8ed5365a4323c9008835022f3b8c502f"
+readonly SIGNING_HOOK_SHA="5857e51d5551e05a7ca384f71529ec2fef07f5a6dbe40df70c6bbe49d720947e"
 
 # PCR 11 prediction store (canonical project path; not under STATE_DIR).
 readonly PCR_STATE_DIR="/root/tboot-lab/state"
@@ -113,7 +113,7 @@ warn() { log "warn: $*"; }
 err()  { log "error: $*"; }
 
 # ============================================================================
-# Trap — cleanup only. Failure markers are written by explicit error paths.
+# Trap: cleanup only. Failure markers are written by explicit error paths.
 # ============================================================================
 
 # shellcheck disable=SC2317,SC2329  # invoked via trap below
@@ -205,7 +205,7 @@ _write_marker_atomic() {
 }
 
 # Usage: _write_failure_marker <code> <stage> <kver> <detail> [<src_log>]
-# Always returns 0 — inability to persist is logged to journald and the
+# Always returns 0: inability to persist is logged to journald and the
 # caller's error-path `exit 1` runs regardless.
 _write_failure_marker() {
     local code="$1" stage="$2" kver="$3" detail="$4" src_log="${5:-}"
@@ -333,7 +333,7 @@ _already_handled() {
 }
 
 # ============================================================================
-# Preflight — READ-ONLY checks. Never mutates the filesystem.
+# Preflight: READ-ONLY checks. Never mutates the filesystem.
 # Used by --self-test and by every real run before lock acquisition.
 # ============================================================================
 
@@ -414,7 +414,7 @@ _preflight() {
     fi
 
     # State directory: must exist, not be a symlink, root:root, 0700, writable.
-    # Install step creates it — never the helper.
+    # Install step creates it: never the helper.
     if ! _check_dir_safe "$STATE_DIR" "$STATE_DIR_MODE" "$STATE_DIR_OWNER" report; then
         rc=1
     fi
@@ -445,7 +445,7 @@ _preflight() {
 }
 
 # ============================================================================
-# Kernel enumeration — deterministic order via sort -V
+# Kernel enumeration: deterministic order via sort -V
 # ============================================================================
 
 _enumerate_kernels() {
@@ -574,13 +574,13 @@ if [[ "$MODE" == "production" ]] && (( DEDUP_USABLE == 1 )) \
     exit 0
 fi
 
-# --- scratch directory on /run (tmpfs) — verified before use ---
+# --- scratch directory on /run (tmpfs): verified before use ---
 SCRATCH="$(mktemp -d -p /run -t tboot-helper-XXXXXX)"
 chmod 0700 "$SCRATCH"
 
 SCRATCH_FSTYPE="$(stat -f -c '%T' "$SCRATCH")"
 if [[ "$SCRATCH_FSTYPE" != "tmpfs" ]]; then
-    err "scratch dir ${SCRATCH} is on ${SCRATCH_FSTYPE}, not tmpfs — aborting"
+    err "scratch dir ${SCRATCH} is on ${SCRATCH_FSTYPE}, not tmpfs: aborting"
     _write_failure_marker 1 "scratch" "(none)" "scratch dir ${SCRATCH} on ${SCRATCH_FSTYPE}, not tmpfs"
     exit 1
 fi

@@ -4,12 +4,12 @@
 #
 # Forward-seal kernel-install-built UKIs by rebuilding the staged UKI via
 # `ukify build` with native PCR signing flags. Operates entirely on
-# $KERNEL_INSTALL_STAGING_AREA and runs before 90-uki-copy.install — on any
+# $KERNEL_INSTALL_STAGING_AREA and runs before 90-uki-copy.install: on any
 # failure, the ESP is never touched.
 #
 # References:
 #   Module 5 §2.2          (TPM-sealed signing key)
-#   Module 5 §3.2          (kernel-install hook design — updated)
+#   Module 5 §3.2          (kernel-install hook design: updated)
 #   Runbook §16.1   (corr) (objcopy unsafe for PE+ construction)
 #   Runbook §16.13  (corr) (objcopy --add-section produces firmware-rejected UKI)
 #   Runbook §16.17         (ukify build native PCR signing canonical)
@@ -48,7 +48,7 @@ info() { log "info: $*"; }
 err()  { log "error: $*"; }
 
 #============================================================================
-# Cleanup trap — always shred scratch contents on exit
+# Cleanup trap: always shred scratch contents on exit
 #============================================================================
 
 # shellcheck disable=SC2317,SC2329  # invoked via trap below
@@ -63,7 +63,7 @@ _cleanup() {
 trap _cleanup EXIT HUP INT TERM
 
 #============================================================================
-# Stage 1 — Gate: only run for kernel-install add of UKI layout
+# Stage 1: Gate: only run for kernel-install add of UKI layout
 #============================================================================
 
 COMMAND="${1:-}"
@@ -79,7 +79,7 @@ KERNEL_VERSION="${2:-}"
 [[ "${KERNEL_INSTALL_UKI_GENERATOR:-ukify}" == "ukify" ]] || exit 0
 
 # Skip if kernel-install was invoked with an external UKI image (KERNEL_INSTALL_IMAGE_TYPE=uki)
-# — that path does not produce a staged UKI for us to enrich
+# That path does not produce a staged UKI for us to enrich.
 [[ "${KERNEL_INSTALL_IMAGE_TYPE:-}" != "uki" ]] || exit 0
 
 # kernel-install must have given us a staging area
@@ -104,7 +104,7 @@ done
 info "starting for kernel ${KERNEL_VERSION}"
 
 #============================================================================
-# Stage 2 — Scratch directory (tmpfs, 0700, root-only)
+# Stage 2: Scratch directory (tmpfs, 0700, root-only)
 #============================================================================
 
 if [[ -d "$SCRATCH" ]]; then
@@ -113,16 +113,16 @@ if [[ -d "$SCRATCH" ]]; then
 fi
 install -d -m 0700 -o root -g root "$SCRATCH"
 
-# Confirm we're on tmpfs (defence in depth — if /run/tboot-sign somehow lands
+# Confirm we're on tmpfs (defence in depth: if /run/tboot-sign somehow lands
 # on persistent storage, we abort before any key material is written there)
 SCRATCH_FSTYPE="$(stat -f -c '%T' "$SCRATCH")"
 if [[ "$SCRATCH_FSTYPE" != "tmpfs" ]]; then
-    err "scratch dir $SCRATCH is on $SCRATCH_FSTYPE, not tmpfs — aborting"
+    err "scratch dir $SCRATCH is on $SCRATCH_FSTYPE, not tmpfs: aborting"
     exit 1
 fi
 
 #============================================================================
-# Stage 3 — Locate staged UKI; sanity-check 60-ukify's output
+# Stage 3: Locate staged UKI; sanity-check 60-ukify's output
 #============================================================================
 
 STAGED_UKI="${KERNEL_INSTALL_STAGING_AREA}/${UKI_NAME}"
@@ -130,15 +130,15 @@ STAGED_UKI="${KERNEL_INSTALL_STAGING_AREA}/${UKI_NAME}"
 [[ -s "$STAGED_UKI" ]] || { err "staged UKI empty: $STAGED_UKI"; exit 1; }
 
 if ! sbverify --cert "$DB_CRT" "$STAGED_UKI" >/dev/null 2>&1; then
-    err "60-ukify produced unsigned UKI — uki.conf likely missing [UKI] SecureBoot* keys"
+    err "60-ukify produced unsigned UKI: uki.conf likely missing [UKI] SecureBoot* keys"
     exit 1
 fi
 
 STAGED_SIZE="$(stat -c%s "$STAGED_UKI")"
-info "60-ukify output present and signed (${STAGED_SIZE} bytes) — will rebuild with .pcrsig"
+info "60-ukify output present and signed (${STAGED_SIZE} bytes): will rebuild with .pcrsig"
 
 #============================================================================
-# Stage 5 — Unseal policy private key (no stage 4 — no extraction needed)
+# Stage 5: Unseal policy private key (no stage 4: no extraction needed)
 #============================================================================
 
 info "unsealing policy private key (TPM2)"
@@ -163,7 +163,7 @@ fi
 info "policy private key unsealed and validated"
 
 #============================================================================
-# Stage 7 — Rebuild UKI via ukify-native PCR signing (NEW — replaces old 4/6/7/8)
+# Stage 7: Rebuild UKI via ukify-native PCR signing (NEW: replaces old 4/6/7/8)
 #============================================================================
 #
 # Old hook (§18.3):
@@ -207,7 +207,7 @@ BUILT_SIZE="$(stat -c%s "$SCRATCH/built.efi")"
 info "ukify build succeeded (${BUILT_SIZE} bytes)"
 
 #============================================================================
-# Stage 9 — Atomic replace within staging
+# Stage 9: Atomic replace within staging
 #============================================================================
 #
 # 90-uki-copy.install will copy the staged UKI to the ESP. By replacing
@@ -216,9 +216,9 @@ info "ukify build succeeded (${BUILT_SIZE} bytes)"
 #
 # Two-step replace because $SCRATCH (tmpfs) and $KERNEL_INSTALL_STAGING_AREA
 # may be on different filesystems:
-#   step 1 — install built.efi to STAGED_UKI.new in the staging dir (cross-fs
+#   step 1: install built.efi to STAGED_UKI.new in the staging dir (cross-fs
 #            copy; non-atomic but to a sentinel name that 90-uki-copy ignores)
-#   step 2 — rename .new over the original within the staging dir (same fs,
+#   step 2: rename .new over the original within the staging dir (same fs,
 #            atomic per POSIX rename(2))
 #
 
@@ -227,11 +227,11 @@ install -m 0600 -o root -g root "$SCRATCH/built.efi" "$STAGED_NEW"
 mv -f "$STAGED_NEW" "$STAGED_UKI"
 
 #============================================================================
-# Stage 10 — Belt-and-braces verification of the final staged UKI
+# Stage 10: Belt-and-braces verification of the final staged UKI
 #============================================================================
 #
 # These checks must all pass. If any fail, the hook exits non-zero,
-# kernel-install aborts the transaction, and 90-uki-copy never runs —
+# kernel-install aborts the transaction, and 90-uki-copy never runs:
 # the ESP is never touched.
 #
 
@@ -240,20 +240,20 @@ mv -f "$STAGED_NEW" "$STAGED_UKI"
 INSPECT_COPY="$SCRATCH/final-inspect.efi"
 cp "$STAGED_UKI" "$INSPECT_COPY"
 
-# 10.1 — .pcrpkey and .pcrsig sections present
+# 10.1: .pcrpkey and .pcrsig sections present
 if ! objdump -h "$INSPECT_COPY" \
      | awk '$2==".pcrpkey"{p=1} $2==".pcrsig"{s=1} END{exit !(p && s)}'; then
     err "final UKI missing .pcrpkey or .pcrsig"
     exit 1
 fi
 
-# 10.2 — Authenticode signature verifies against db.crt
+# 10.2: Authenticode signature verifies against db.crt
 if ! sbverify --cert "$DB_CRT" "$STAGED_UKI" >/dev/null 2>&1; then
     err "final UKI sbverify failed"
     exit 1
 fi
 
-# 10.3 — Exactly one Authenticode signer (no double-signing, no missing sig)
+# 10.3: Exactly one Authenticode signer (no double-signing, no missing sig)
 sig_count="$(pesign --show-signature --in="$INSPECT_COPY" 2>/dev/null \
               | grep -c 'common name' || true)"
 if (( sig_count != 1 )); then
@@ -261,7 +261,7 @@ if (( sig_count != 1 )); then
     exit 1
 fi
 
-# 10.4 — Section-VMA sanity (catch §16.13-style layout corruption)
+# 10.4: Section-VMA sanity (catch §16.13-style layout corruption)
 #
 # Any section with VMA >= $VMA_SANITY_THRESHOLD indicates the kind of
 # layout damage objcopy --add-section produced (.pcrsig at 0x200000000).
@@ -278,11 +278,11 @@ if objdump -h "$INSPECT_COPY" \
        }
        END { exit !bad }
      '; then
-    err "final UKI has section(s) with anomalous VMA (>= ${VMA_SANITY_THRESHOLD}) — see Runbook §16.13"
+    err "final UKI has section(s) with anomalous VMA (>= ${VMA_SANITY_THRESHOLD}): see Runbook §16.13"
     exit 1
 fi
 
-# 10.5 — File size within sanity range (kernel UKIs are 30–80 MB; outside
+# 10.5: File size within sanity range (kernel UKIs are 30–80 MB; outside
 # this is a strong signal something went wrong)
 FINAL_SIZE="$(stat -c%s "$STAGED_UKI")"
 if (( FINAL_SIZE < 20 * 1024 * 1024 || FINAL_SIZE > 200 * 1024 * 1024 )); then
