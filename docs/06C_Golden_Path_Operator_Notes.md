@@ -72,16 +72,31 @@ A UKI is a single PE/COFF (EFI) binary that bundles the kernel, initramfs, kerne
 
 ### 3.3 The signing hook — `80-tpm2-sign.install`
 
-This is the piece most worth understanding, because nearly every later gate exists to protect it. It is a **`kernel-install` plugin**: a script at `/etc/kernel/install.d/80-tpm2-sign.install` that `kernel-install` runs automatically, in lexicographic order with the other `install.d` drop-ins, every time a kernel is added. Its job is to take the UKI that the stock `ukify` plugin just staged and **rebuild it as a forward-sealed, signed UKI** — joining the predicted PCR-policy signature into the image and signing the result with the `db` key — then place it on the ESP under its machine-id-prefixed name (`${MID}-${KVER}.efi`).
+This is the piece most worth understanding, because nearly every later gate
+exists to protect it. It is a **`kernel-install` plugin**: a script at
+`/etc/kernel/install.d/80-tpm2-sign.install` that `kernel-install` runs
+automatically, in lexicographic order with the other `install.d` drop-ins,
+every time a kernel is added. Its job is to take the UKI that the stock `ukify`
+plugin just staged and **rebuild it as a forward-sealed, signed UKI** in one
+native `ukify build` operation, embedding the predicted PCR policy and applying
+the `db` signature before the image is placed on the ESP under its
+machine-id-prefixed name (`${MID}-${KVER}.efi`).
 
 The operator-relevant facts:
 
 - It is the **UKI signing authority**. The B.2 automation chain does not sign UKIs itself; it *invokes the conditions that cause this hook to run*. If the hook is wrong, every downstream measurement is wrong.
 - It reads its UKI layout from `/etc/kernel/uki.conf` (the path `kernel-install`'s ukify plugin honours) — *not* `/etc/systemd/ukify.conf`, which only applies when `ukify` is called directly. This distinction is a known mentor-note error (`06F`).
 - It depends on `BOOT_ROOT=/boot/efi` being persisted in `/etc/kernel/install.conf`; the default `BOOT_ROOT=/boot` puts UKIs in the wrong place.
-- It forward-seals with `ukify --join-pcrsig`, **never** `objcopy --add-section` — the latter produces a binary that passes `sbverify` but is firmware-rejected at `LoadImage()` because of corrupt section VMAs (`06F` B.1).
+- It uses one native `ukify build` invocation with the PCR-signing and Secure
+  Boot options. It uses neither `ukify --join-pcrsig` nor
+  `objcopy --add-section`: the former silently no-ops on the validated systemd
+  release, while the latter can produce a binary that passes `sbverify` but is
+  firmware-rejected at `LoadImage()` because of corrupt section VMAs (`06F`
+  B.1-B.2).
 
-Deep dive: the design rationale is `05` §3.2 (note: `05` shows a generic `99-`-prefixed example; the canonical artifact here is `80-tpm2-sign.install`), and the forward-sealing theory is `02`. The byte-exact hook source is inlined in `06B` Step 14 (sha-pinned).
+Deep dive: the validated package-update architecture is `05` §3 and the
+forward-sealing theory is `02`. The byte-exact hook source is inlined in `06B`
+Step 14 and shipped as `hooks/80-tpm2-sign.install` (sha-pinned).
 
 ### 3.4 Forward sealing and the two PCRs
 

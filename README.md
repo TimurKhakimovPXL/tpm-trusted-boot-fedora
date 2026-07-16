@@ -4,9 +4,9 @@ My thesis project for the associate degree (graduaat) in System and Network
 Administration at PXL University of Applied Sciences, built with an industry
 partner: a trusted boot chain on Fedora Server 43 that keeps working when you
 update the system. Custom Secure Boot keys, signed Unified Kernel Images, TPM2
-forward sealing and LUKS2 auto-unlock, held together by a DNF plugin chain that
-re-signs the boot path whenever a package transaction touches it. The LUKS
-keyslot is never re-enrolled.
+forward sealing and LUKS2 auto-unlock, held together by a DNF actions chain
+that evaluates boot-input drift after every package transaction and rebuilds
+only when necessary. The LUKS keyslot is never re-enrolled.
 
 RHEL is the design target; Fedora 43 is what it was validated on.
 
@@ -34,15 +34,21 @@ Five layers:
 | 4. Disk encryption | LUKS2 split policy: PCR 7 (static) + PCR 11 (signed) |
 | 5. Governance | `libdnf5-actions` decider/helper chain that re-signs on drift |
 
-Layer 5 is the interesting one. A decider plugin runs inside every RPM
-transaction and checks whether the transaction touched the boot chain. If it
-did, a helper rebuilds the initramfs, re-signs the UKI and refreshes the signed
-PCR 11 prediction. Because the LUKS policy is signed rather than pinned to a
-literal PCR value, a fresh prediction is all it takes. The keyslot itself is
-never touched.
+Layer 5 is the interesting one. A `libdnf5-actions` rule invokes a decider after
+every completed host transaction. The decider compares a manifest of
+boot-relevant inputs with a stored baseline. When it detects drift, a helper
+rebuilds the initramfs and UKIs, invokes the canonical signing hook and
+refreshes the expected PCR 11 value. Because the LUKS policy authorises signed
+PCR states rather than one literal value, the LUKS keyslot itself is never
+touched.
 
-The chain is fail-closed: if any step of the re-signing fails, the transaction
-is blocked instead of leaving behind a system that will not unlock on reboot.
+The chain fails closed against blessing an unsafe boot state. The action runs
+in `post_transaction`, after the RPM transaction has committed, so a signing
+failure does not roll packages back. Instead, DNF reports an error, the
+baseline is not advanced, and the `UNSAFE-TO-REBOOT` sentinel remains present
+until the boot artifacts are successfully repaired. The sentinel is an
+operational stop marker; this implementation does not mechanically inhibit a
+reboot.
 
 ## What was validated
 
@@ -67,8 +73,12 @@ reboot into the signed UKI.
 
 [Watch the runtime trusted-boot demonstration](validation/tpm-trusted-boot-runtime-demo.mp4).
 
-The video is an original laboratory console capture. Text documents in this
-repository use sanitized machine identifiers.
+The video is an original laboratory console capture of the controlled package
+reinstall and reboot path. The later unrestricted full `dnf update` result is
+summarized above; its raw terminal transcript is not included. Text documents
+in this repository use sanitized machine identifiers. See the
+[runtime evidence appendix](docs/07_Runtime_Validation_Evidence.md#4-published-runtime-demonstration)
+for the recording's evidence scope.
 
 ## Thesis report
 
@@ -117,8 +127,10 @@ with symptom, root cause, reproduction and fix per entry. Some highlights:
 ```
 docs/           Architecture (00-05), findings catalog (06F), rebuild
                 runbook (06B), operator notes (06C), evidence appendices (07-09)
+docs/thesis/    English thesis PDF, editable source and architecture figures
 hooks/          80-tpm2-sign.install - kernel-install hook: build and sign UKI
 dnf-actions/    libdnf5-actions decider/helper chain, both boot-loader paths
+validation/     Published runtime demonstration
 SHA256SUMS      Integrity manifest for the shipped scripts
 ```
 

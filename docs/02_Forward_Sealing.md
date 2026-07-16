@@ -197,9 +197,33 @@ All components — measurement, sealing, and unlocking — must use the same PCR
 
 `systemd-pcrphase` extends boot phase markers into PCR 11 at runtime: `enter-initrd`, `leave-initrd`, `sysinit`, `ready`. These are part of the measured state. `systemd-measure` accounts for these automatically when invoked correctly — but be aware that PCR 11 at disk-unlock time is not solely the UKI hash. It also contains phase markers from earlier in the boot.
 
-### 6.4 Enrollment Safety Check
+### 6.4 Enrollment Safety in This Implementation
 
-When enrolling a LUKS TPM2 slot with `--tpm2-signature`, `systemd-cryptenroll` validates that the provided signature actually works against the current PCRs **before** writing the keyslot. This prevents bricking the volume with a misconfigured or mismatched signature. Never skip this step or bypass it.
+`systemd-cryptenroll` can use `--tpm2-signature` to test a supplied signed
+policy against the **current** PCR state before writing a slot. That check is
+useful when the signature describes the PCR state that exists during
+enrollment.
+
+The validated hook in this project signs PCR 11 for the `enter-initrd` phase,
+because early-boot disk unlocking occurs in that phase. Enrollment is performed
+later, after the machine has progressed beyond it. The current runtime PCR 11
+therefore differs from the signed `enter-initrd` value, and enrollment-time
+signature validation would fail even though the boot-time policy is correct.
+
+The validated split-policy enrollment shape is consequently:
+
+```bash
+systemd-cryptenroll /dev/sda3 \
+  --tpm2-device=auto \
+  --tpm2-pcrs=7 \
+  --tpm2-public-key=/etc/systemd/tpm2-pcr-public-key.pem \
+  --tpm2-public-key-pcrs=11
+```
+
+Safety is maintained by retaining the passphrase recovery keyslot, validating
+the split policy through a real reboot, and comparing runtime PCR 11 with the
+stored prediction. See Module 3 and finding G.1 in the Diagnostic Findings
+Catalog.
 
 ---
 
