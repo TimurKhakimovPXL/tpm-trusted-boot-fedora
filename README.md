@@ -56,6 +56,12 @@ does not prevent the machine from rebooting.
   not re-enrolled.
 - The passphrase fallback still works as a recovery path.
 
+Those results apply to the May and June 2026 lab revision. The source published
+on 16 July 2026 adds stricter sentinel and state-directory failure handling and
+has passed repository integrity, shell syntax and embedded-copy checks. A fresh
+live transaction and reboot regression run for that source revision is still
+pending.
+
 Captured console evidence is in
 [docs/07_Runtime_Validation_Evidence.md](docs/07_Runtime_Validation_Evidence.md),
 tamper scenarios in [docs/08_Attack_Scenarios.md](docs/08_Attack_Scenarios.md).
@@ -90,15 +96,15 @@ The thesis lists seven appendices, submitted separately with the graded report. 
 
 | Thesis appendix | In this repo |
 |---|---|
-| 1 — Build-time architecture diagram | `docs/thesis/figures/figure1_build_time_flow.png` |
-| 2 — Boot-time architecture diagram | `docs/thesis/figures/figure2_boot_time_flow.png` |
-| 3a — kernel-install hook | `hooks/80-tpm2-sign.install` |
-| 3b — first fail-closed chain (UKI) | `dnf-actions/tboot-dnf-posttrans`, `tboot-dnf-helper`, `tboot-predict-pcr11`, `50-tboot-posttrans.actions` |
-| 3c — second fail-closed chain (systemd-boot) | `dnf-actions/tboot-sbloader-posttrans`, `tboot-sbloader-helper`, `60-tboot-sbloader.actions` |
-| 4 — Runtime validation CLI output | `docs/07_Runtime_Validation_Evidence.md` |
-| 5 — Diagnostic Findings Catalog | `docs/06F_Diagnostic_Findings_Catalog.md` |
-| 6 — Attack-scenario results | `docs/08_Attack_Scenarios.md` |
-| 7 — Forensic artifact `bad-objcopy-pcrsig-loaderror.efi` | Write-up in `docs/09_Forensic_Artifact_objcopy_UKI.md`; the firmware-rejected binary itself is not published |
+| 1: Build-time architecture diagram | `docs/thesis/figures/figure1_build_time_flow.png` |
+| 2: Boot-time architecture diagram | `docs/thesis/figures/figure2_boot_time_flow.png` |
+| 3a: kernel-install hook | `hooks/80-tpm2-sign.install` |
+| 3b: first fail-closed chain (UKI) | `dnf-actions/tboot-dnf-posttrans`, `tboot-dnf-helper`, `tboot-predict-pcr11`, `50-tboot-posttrans.actions` |
+| 3c: second fail-closed chain (systemd-boot) | `dnf-actions/tboot-sbloader-posttrans`, `tboot-sbloader-helper`, `60-tboot-sbloader.actions` |
+| 4: Runtime validation CLI output | `docs/07_Runtime_Validation_Evidence.md` |
+| 5: Diagnostic Findings Catalog | `docs/06F_Diagnostic_Findings_Catalog.md` |
+| 6: Attack-scenario results | `docs/08_Attack_Scenarios.md` |
+| 7: Forensic artifact `bad-objcopy-pcrsig-loaderror.efi` | Write-up in `docs/09_Forensic_Artifact_objcopy_UKI.md`; the firmware-rejected binary itself is not published |
 
 ## Findings along the way
 

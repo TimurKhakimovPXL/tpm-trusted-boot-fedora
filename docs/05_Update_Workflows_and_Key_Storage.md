@@ -9,37 +9,49 @@ module: 5
 status: stable
 ---
 
-# Module 5 — Update Workflows and Signing Key Storage
+# Module 5: Update Workflows and Signing Key Storage
 
 ## Purpose of This Module
 
 Modules 1–4 define the architecture and its governance model. This module addresses the operational question that arises the moment someone runs `sudo dnf upgrade` on a production machine:
 
-> How does a new UKI get signed so the system does not lock itself out on the next reboot — and where should the private key live to make that safe?
+> How does a new UKI get signed before the next reboot, and where should the
+> private key live?
 
 Two distinct workflows exist depending on how the OS is managed. Both are covered here.
 
 > [!NOTE]
-> **The Problem in One Sentence**
-> Every UKI rebuild produces a new PCR 11. Without a valid `.pcrsig` for that new value, the TPM refuses to release the disk key on the next boot.
+> A rebuild that changes measured UKI content needs a valid policy signature
+> for the resulting PCR 11 value before the next boot.
 
 ---
 
 ## 1. The Gap That Must Be Closed
 
-When a new UKI is produced — by a kernel update, an initramfs rebuild after a driver update, or a cmdline change — PCR 11 changes. Forward sealing requires a `.pcrsig` that authorises that new PCR value before the next reboot occurs.
+When a kernel, initramfs, embedded command line or another measured section
+changes, the resulting PCR 11 value changes. A rebuild of identical measured
+content can produce a different UKI file hash while leaving PCR 11 unchanged.
+Forward sealing requires the embedded `.pcrsig` to authorise the calculated PCR
+11 state before the next reboot.
 
 In a CI/CD pipeline this gap does not exist: signing is part of the build. In a manually managed system, something must fill that gap locally and automatically.
 
-The solution is a **local signing hook** that runs `systemd-measure` every time `kernel-install` produces a new UKI. The private key used by that hook is what determines the security level of the entire arrangement.
+The validated solution is a local `kernel-install` hook that rebuilds the UKI
+with native `ukify` PCR-policy and Secure Boot signing options. A separate
+predictor uses `systemd-measure calculate` as an independent PCR 11 check. The
+location and release policy of both private keys define the compromise boundary
+of this arrangement.
 
 ---
 
 ## 2. Where the Private Key Can Live
 
-Storing the private key as a plaintext file on the machine is the weakest option and should be avoided in sensitive environments. The following alternatives are ordered by increasing security strength.
+Storing the policy private key as a plaintext file on the machine is the
+weakest option and should be avoided in sensitive environments. The following
+models have different operational and compromise boundaries; they are not a
+simple ranking.
 
-### 2.1 Plaintext on Disk (Baseline — Avoid in Sensitive Environments)
+### 2.1 Plaintext on Disk (Baseline: Avoid in Sensitive Environments)
 
 ```
 /etc/systemd/tpm2-pcr-private-key.pem   (chmod 600, root only)
@@ -51,7 +63,7 @@ Simple to set up. An attacker with root access or physical disk access can extra
 
 ### 2.2 TPM-Sealed Private Key
 
-The private key is stored on disk but encrypted by the TPM — bound to PCR 7 (Secure Boot policy). The key cannot be decrypted without the TPM that sealed it, so offline disk extraction yields nothing useful.
+The private key is stored on disk but encrypted by the TPM: bound to PCR 7 (Secure Boot policy). The key cannot be decrypted without the TPM that sealed it, so offline disk extraction yields nothing useful.
 
 **Setup (once, at provisioning time):**
 
@@ -89,11 +101,20 @@ shred -u /tmp/tpm2-pcr-private-key-unsealed.pem
 
 > [!NOTE]
 > **What This Protects Against**
-> Offline disk theft — the encrypted key file is useless without the TPM. It does not protect against a fully compromised running OS, since the OS can request the unseal operation from the TPM while the system is running.
+> Offline disk theft: the encrypted key file is useless without the TPM. It does not protect against a fully compromised running OS, since the OS can request the unseal operation from the TPM while the system is running.
+
+The validated hook also reads the Secure Boot private key from
+`/etc/uefi-keys/db.key` as a root-only plaintext file. TPM-sealing the policy
+key does not protect that separate key. A root compromise while the host is in
+an approved state can therefore reach both local signing paths.
 
 ---
 
 ### 2.3 Hardware Security Module (HSM) or Smart Card
+
+This is an alternative design, not an implementation shipped by this
+repository. The validated hook decrypts a TPM-sealed PEM key and does not
+contain PKCS#11 support.
 
 The private key is generated inside the HSM and never leaves it. The signing operation is performed by the hardware itself; the OS only sends data to be signed and receives the signature back.
 
@@ -117,11 +138,16 @@ systemd-measure sign \
 > **Version Requirement**
 > `--private-key-source=` is available from systemd v256 onwards. Verify your distribution ships a sufficient version before relying on PKCS#11 signing in the hook.
 
-**Operational implication:** The HSM must be physically present when `dnf upgrade` runs. Without it, the signing step fails. For sensitive environments, this is a deliberate control — a new boot state cannot be authorised without physical admin presence.
+An HSM does not automatically protect signing from a compromised operating
+system. A logged-in root process may still invoke the token unless the token
+requires an independent PIN, touch, quorum or approval for each operation.
 
 ---
 
 ### 2.4 Remote Signing Service
+
+This is also an architectural option rather than part of the validated local
+implementation.
 
 The private key lives on a centralised signing server. The machine sends only the predicted PCR hash; the service returns the signature. The key never touches the endpoint machine.
 
@@ -147,7 +173,10 @@ The service can enforce additional controls before signing:
 - Reject requests outside maintenance windows
 - Log every signing event centrally with full audit trail
 
-This is the recommended model for enterprise fleets. It is also the architecture that a CI/CD pipeline implements — the pipeline is the signing service, triggered by a merge rather than an upgrade event.
+A remote service provides a separate security boundary only when it validates
+the requested artifact or measurement against independent policy. A service
+that signs any PCR value submitted by an authenticated endpoint remains
+vulnerable to a compromised endpoint.
 
 ---
 
@@ -155,10 +184,10 @@ This is the recommended model for enterprise fleets. It is also the architecture
 
 | Storage Model | Key Leaves Machine | Offline Disk Attack | Compromised OS | Suitable For |
 |--------------|-------------------|--------------------:|----------------|--------------|
-| Plaintext on disk | N/A — it is on disk | ❌ Exposed | ❌ Exposed | Personal workstations only |
+| Plaintext on disk | N/A: it is on disk | ❌ Exposed | ❌ Exposed | Personal workstations only |
 | TPM-sealed on disk | No | ✅ Protected | ❌ Exposed | Single machines, moderate sensitivity |
-| HSM / Smart card | Never | ✅ Protected | ✅ Protected | High-sensitivity, requires physical presence |
-| Remote signing service | Never | ✅ Protected | ✅ Protected | Enterprise fleets, full audit trail |
+| HSM / Smart card | Never | ✅ Protected | Conditional on token policy | Deliberately authorised local signing |
+| Remote signing service | Never | ✅ Protected | Conditional on server-side validation | Centrally governed fleets |
 
 ---
 
@@ -294,17 +323,17 @@ The full installation and validation sequence is in
 
 ---
 
-## 4. Workflow 2 — Image-Based Updates (bootc / OSTree)
+## 4. Workflow 2: Image-Based Updates (bootc / OSTree)
 
 ### 4.1 How Image-Based Updates Work
 
-In an image-based model the OS is never mutated in place. The entire OS — kernel, drivers, initramfs, and UKI — is built as an atomic image in CI. `bootc pull` stages the new image alongside the current one. On reboot, the system activates the new image. The old image is retained as the rollback target.
+In an image-based model the OS is never mutated in place. The entire OS: kernel, drivers, initramfs, and UKI, is built as an atomic image in CI. `bootc pull` stages the new image alongside the current one. On reboot, the system activates the new image. The old image is retained as the rollback target.
 
 ```
 CI pipeline builds new OS image
   → kernel + NVIDIA driver + initramfs bundled into image
   → UKI extracted and signed during image build
-  → .pcrsig embedded in image or shipped alongside it
+  → .pcrsig and .pcrpkey embedded in the UKI
   → bootc pull stages new image on the machine
   → Reboot activates new deployment
     → New UKI boots → new PCR 11 → matches .pcrsig → disk unlocks
@@ -314,14 +343,19 @@ There is no gap between update and signing because they are the same atomic oper
 
 ### 4.2 Rollback
 
-Because the previous image is retained on the ESP, its `.pcrsig` also remains valid. Rolling back to the previous image produces the previous PCR 11, which still has a matching signature. No re-enrollment is needed.
+Because the previous signed UKI is retained on the ESP, its embedded policy
+remains valid. Rolling back to that UKI reproduces its authorised PCR 11 state.
+No re-enrollment is needed while its policy key remains enrolled.
 
 ```
 Current image  → .pcrsig A → valid → unlocks
 Rollback image → .pcrsig B → valid → also unlocks
 ```
 
-Rollback protection (preventing revert to a vulnerable image) is enforced by removing the old `.pcrsig`. Without a valid signature, the old image cannot unlock the disk even if it boots. See [Module 4 — Rollback and Version Control](04_Governance_Recovery_Lifecycle.md).
+To revoke the old deployment, remove its UKI from every bootable location and
+verify that no boot-loader or firmware entry still selects it. Removing a
+standalone signature file does not revoke a signature embedded in a UKI. See
+[Module 4: Rollback and Version Control](04_Governance_Recovery_Lifecycle.md).
 
 ---
 
@@ -333,21 +367,25 @@ Rollback protection (preventing revert to a vulnerable image) is enforced by rem
 | Private key location | On machine (various options) | In CI secrets |
 | Kernel update automated | ✅ Yes, via kernel-install hook | ✅ Yes, part of image build |
 | Driver update automated | ⚠️ Requires DNF plugin too | ✅ Yes, always included in image |
-| Rollback signing | Manual — retain old .pcrsig | Built in via bootc |
+| Rollback signing | Retain or remove complete signed UKIs | Retain or remove complete signed deployments |
 | Audit trail | Local logs only | Full CI pipeline audit log |
 | Suitable for | Workstations, single machines | Servers, fleets, immutable OS |
 
 ---
 
-## 6. Recommended Architecture for Sensitive Environments
+## 6. External Signer Design Considerations
 
-Sensitive environments that require manual updates but cannot accept a pipeline have one additional constraint: **a new boot state should not be authorisable without deliberate physical admin action**.
+An HSM or remote service can add an approval boundary, but the shipped hook
+does not implement either integration. A future design would need to define the
+signer interface, authentication, request validation, timeout behavior and
+recovery path. For an HSM, it must also define whether every signature requires
+touch, PIN or another action that a compromised host cannot silently satisfy.
 
-An HSM achieves this naturally:
+The intended flow would be:
 
 ```
 ┌──────────────────────────────────────────────────────┐
-│  Sensitive Environment — Manual Update Architecture  │
+│  Sensitive Environment: Manual Update Architecture  │
 │                                                      │
 │  Private key:   HSM (YubiKey / Nitrokey)             │
 │  Signing:       kernel-install hook + DNF plugin     │
@@ -362,23 +400,24 @@ An HSM achieves this naturally:
 │    → reboot → disk unlocks                           │
 │                                                      │
 │  Without HSM present:                                │
-│    → dnf upgrade runs                               │
-│    → hook fires, signing fails (no HSM)              │
-│    → .pcrsig not updated                             │
-│    → system falls back to previous UKI               │
-│    → or halts if no fallback entry exists            │
+│    → dnf upgrade commits package changes             │
+│    → post-transaction signing fails                  │
+│    → unsafe-reboot sentinel remains                  │
+│    → operator repairs the chain before reboot        │
 └──────────────────────────────────────────────────────┘
 ```
 
-The requirement for physical presence is a feature in sensitive environments: no new boot state can be authorised remotely or without the administrator being physically present with the signing token. This satisfies audit requirements and prevents remote compromise of the signing process.
+Physical presence is a meaningful control only if the token enforces it for
+each signing operation. Possession of an HSM alone does not establish that
+property.
 
 ---
 
-## 7. The One Rule That Applies to All Workflows
+## 7. Recovery Requirement for Every Workflow
 
 > [!WARNING]
 > **Recovery Keyslot Is Mandatory**
-> If the signing hook fails, the HSM is lost, the signing service is unreachable, or anything breaks the `.pcrsig` chain — the recovery keyslot is the only way back in.
+> If the signing hook fails, the HSM is lost, the signing service is unreachable, or anything breaks the `.pcrsig` chain: the recovery keyslot is the only way back in.
 >
 > Enroll a high-entropy recovery passphrase at provisioning time and store it in an offline vault or escrow system. Without it, any failure in the signing workflow results in a permanently locked disk.
 
@@ -387,13 +426,13 @@ The requirement for physical presence is a feature in sensitive environments: no
 systemd-cryptenroll /dev/nvme0n1p3 --password
 ```
 
-See [Module 4 — Disaster Recovery](04_Governance_Recovery_Lifecycle.md) for full recovery procedures.
+See [Module 4: Disaster Recovery](04_Governance_Recovery_Lifecycle.md) for full recovery procedures.
 
 ---
 
 ## Related Notes
 
-- [Introduction — Architecture Overview](00_Introduction.md)
-- [Module 2 — Forward Sealing](02_Forward_Sealing.md)
-- [Module 3 — Disk Encryption and Policy Enforcement](03_Disk_Encryption_and_Policy_Enforcement.md)
-- [Module 4 — Governance, Recovery, and Lifecycle](04_Governance_Recovery_Lifecycle.md)
+- [Introduction: Architecture Overview](00_Introduction.md)
+- [Module 2: Forward Sealing](02_Forward_Sealing.md)
+- [Module 3: Disk Encryption and Policy Enforcement](03_Disk_Encryption_and_Policy_Enforcement.md)
+- [Module 4: Governance, Recovery, and Lifecycle](04_Governance_Recovery_Lifecycle.md)

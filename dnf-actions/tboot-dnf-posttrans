@@ -63,7 +63,7 @@
 #   60  self-test trust-boundary scan: forbidden token in non-comment line
 #
 # Modes (preflight enforces helper presence in normal/dry-run/prime; the
-# dry-run requirement is INTENTIONAL — dry-run validates production readiness
+# dry-run requirement is INTENTIONAL: dry-run validates production readiness
 # end-to-end, including the helper's installation profile):
 #   (none) | --self-test | --debug-print | --dry-run | --prime [--confirm-prime]
 #   --version | --help
@@ -80,7 +80,7 @@ set -euo pipefail
 # Constants
 # ============================================================================
 
-readonly DECIDER_VERSION="0.1.0-draft-B.2.3-pre-validation"
+readonly DECIDER_VERSION="1.0.0"
 readonly TAG="tboot-dnf-posttrans"
 
 readonly LOCK_FILE="/run/tboot-dnf-posttrans.lock"
@@ -893,7 +893,12 @@ _mode_normal() {
             drift|no-baseline)
                 local reason="drift-detected"
                 [[ "$cmp" == "no-baseline" ]] && reason="no-baseline-present"
-                _write_sentinel "$reason" || warn "sentinel write failed; continuing"
+                if ! _write_sentinel "$reason"; then
+                    err "sentinel write failed; refusing to invoke helper"
+                    _write_last_decision "sentinel-write-failed" "${reason}; helper not invoked"
+                    _write_last_error "sentinel-write" "42" "helper not invoked"
+                    exit 42
+                fi
                 _persist_last_manifest "$cur"
                 _write_last_decision "helper-pending" "${reason}; invoking helper"
                 info "helper invocation decision: INVOKE (${reason})"

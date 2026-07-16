@@ -9,7 +9,7 @@ module: 3
 status: stable
 ---
 
-# Module 3 — Disk Encryption and Policy Enforcement
+# Module 3: Disk Encryption and Policy Enforcement
 
 ## Purpose of This Module
 
@@ -31,7 +31,7 @@ The disk now enforces the following rule:
 
 > Unlock if and only if the TPM presents a valid policy session that was authorised by the private key counterpart of this specific public key.
 
-No other credential — not a different key, not a manually crafted PCR value, not a replayed session — satisfies this condition.
+No other credential: not a different key, not a manually crafted PCR value, not a replayed session: satisfies this condition.
 
 ### 1.2 Enrollment Command
 
@@ -40,8 +40,8 @@ No other credential — not a different key, not a manually crafted PCR value, n
 install -m 644 tpm2-pcr-public-key.pem /etc/systemd/tpm2-pcr-public-key.pem
 
 # Enroll the TPM2 keyslot with SPLIT policy:
-#   PCR 7  — statically bound to current Secure Boot policy state
-#   PCR 11 — signed-policy bound via the policy public key
+#   PCR 7: statically bound to current Secure Boot policy state
+#   PCR 11: signed-policy bound via the policy public key
 systemd-cryptenroll /dev/nvme0n1p3 \
   --tpm2-device=auto \
   --tpm2-pcrs=7 \
@@ -53,7 +53,10 @@ systemd-cryptenroll /dev/nvme0n1p3 \
 > **Asymmetric PCR treatment**
 > The two PCRs are bound differently because they have different change frequencies:
 > - **PCR 7** is the Secure Boot policy value. It is stable across the system's lifetime; runtime changes indicate SB key rotation, which is itself a governance event requiring re-enrollment. Static binding is appropriate.
-> - **PCR 11** changes on every UKI rebuild (kernel update, initramfs change, cmdline change). Static binding would require manual re-enrollment after every update, defeating the purpose of forward sealing. Signed-policy binding lets the policy key authorise future PCR 11 values.
+> - **PCR 11** changes when measured UKI content changes, for example after a
+>   kernel, initramfs or embedded command-line change. Static binding would
+>   require manual re-enrollment for each new measured state. Signed-policy
+>   binding lets the policy key authorise those future PCR 11 values.
 
 > [!WARNING]
 > **`--tpm2-signature` is intentionally omitted**
@@ -69,7 +72,7 @@ systemd-cryptenroll /dev/nvme0n1p3 \
 
 ### 2.1 What PCRs Are
 
-PCRs live inside the TPM chip — not on the disk. They store accumulated hash measurements of everything that has run since power-on.
+PCRs live inside the TPM chip: not on the disk. They store accumulated hash measurements of everything that has run since power-on.
 
 > [!TIP]
 > **Scoreboard Analogy**
@@ -85,17 +88,17 @@ Values can only be extended, never overwritten. They reset only on TPM reset or 
 
 | PCR | Measures | Stability |
 |-----|----------|-----------|
-| **7** | Secure Boot state — DB, DBX, PK, KEK certificates | Stable until key rotation |
-| **11** | UKI sections + boot phase markers | Changes with every UKI update |
+| **7** | Secure Boot state: DB, DBX, PK, KEK certificates | Stable until key rotation |
+| **11** | UKI sections + boot phase markers | Changes when measured content or phase inputs change |
 
-By the time `systemd-cryptsetup` requests the disk key, PCR 7 and PCR 11 together encode: which Secure Boot policy is active, and exactly which UKI ran.
+By the time `systemd-cryptsetup` requests the disk key, PCR 7 and PCR 11 together encode, which Secure Boot policy is active, and exactly which UKI ran.
 
 > [!NOTE]
-> **PCR 15 — System Identity (Conditional Addition)**
-> PCR 15 (`system-identity`) measures machine ID, root filesystem UUID, and LUKS metadata. Including it in the policy provides protection against filesystem confusion attacks — where an attacker swaps GPT partitions or duplicates UUIDs to trick the unlock mechanism.
+> **PCR 15: System Identity (Conditional Addition)**
+> PCR 15 (`system-identity`) measures machine ID, root filesystem UUID, and LUKS metadata. Including it in the policy provides protection against filesystem confusion attacks: where an attacker swaps GPT partitions or duplicates UUIDs to trick the unlock mechanism.
 >
 > In the split-policy model used by this project, PCR 15 must be **deliberately assigned to either the static PCR policy path or the signed-policy path**, not both:
-> - Adding it via `--tpm2-pcrs=` (alongside PCR 7) binds the keyslot to the current PCR 15 value statically — fine as long as the bound system identity doesn't change.
+> - Adding it via `--tpm2-pcrs=` (alongside PCR 7) binds the keyslot to the current PCR 15 value statically: fine as long as the bound system identity doesn't change.
 > - Adding it via `--tpm2-public-key-pcrs=` (alongside PCR 11) requires the UKI / `.pcrsig` generation path to **also sign for PCR 15**. The validated hook in this project signs only PCR 11; adding PCR 15 to the signed-policy list without updating the hook causes enrollment-time policy lookup or boot-time unlock to fail.
 >
 > For high-assurance deployments, the static-policy form is the lower-risk addition.
@@ -110,11 +113,11 @@ The LUKS2 header is a metadata area at the very beginning of the encrypted parti
 
 It contains:
 
-- **Keyslots** — each holds an encrypted copy of the master key, protected by a different credential
-- **Tokens** — metadata linking keyslots to external unlock mechanisms (TPM, FIDO2, etc.)
-- **Configuration** — cipher, hash algorithm, key size
+- **Keyslots**: each holds an encrypted copy of the master key, protected by a different credential
+- **Tokens**: metadata linking keyslots to external unlock mechanisms (TPM, FIDO2, etc.)
+- **Configuration**: cipher, hash algorithm, key size
 
-### 3.2 PCRs vs Keyslots — Two Separate Things
+### 3.2 PCRs vs Keyslots: Two Separate Things
 
 This distinction is frequently confused.
 
@@ -122,7 +125,7 @@ This distinction is frequently confused.
 |--|------|----------|
 | **Location** | Inside the TPM chip | Inside the LUKS2 header on disk |
 | **Contents** | Hash measurements of the boot process | Encrypted copies of the master key |
-| **Role** | Security journal — records what ran | Lock — protects the key |
+| **Role** | Security journal: records what ran | Lock: protects the key |
 | **Controlled by** | TPM hardware | `cryptsetup` / `systemd-cryptenroll` |
 
 They work together: the keyslot stores the key, and the PCRs determine whether the TPM is willing to release the credential needed to open that keyslot.
@@ -161,7 +164,7 @@ When `systemd-cryptsetup@cryptroot.service` runs during initramfs, the following
    b) PCR 11 satisfies a policy authorised by the enrolled public key
       and the UKI-provided .pcrsig
    (PCR 7 is not signed. Only PCR 11 is. The two PCRs are bound by
-    different mechanisms — see §1.2 for the architectural reason.)
+    different mechanisms: see §1.2 for the architectural reason.)
 
 5. RELEASE
    Both checks pass → TPM releases the sealed secret
@@ -173,7 +176,7 @@ When `systemd-cryptsetup@cryptroot.service` runs during initramfs, the following
    → System continues boot on decrypted volume
 ```
 
-If either check in step 4 fails — wrong key, tampered UKI, unapproved boot state — the TPM releases nothing. The disk remains encrypted and inaccessible.
+If either check in step 4 fails: wrong key, tampered UKI, unapproved boot state: the TPM releases nothing. The disk remains encrypted and inaccessible.
 
 ---
 
@@ -196,7 +199,7 @@ When systemd encounters this during initramfs startup, it spawns `systemd-crypts
 > - `tpm2-pubkey-pcrs: 11` (signed-policy bound)
 > - `tpm2-pcr-bank: sha256`
 >
-> The crypttab option `tpm2-device=auto` is sufficient — it tells `systemd-cryptsetup` to look up the TPM2 token and use whatever PCR configuration was committed at enrollment time. Specifying `tpm2-pcrs=` or `tpm2-public-key-pcrs=` in crypttab would create a second source of truth that can drift from the LUKS token; the systemd convention is to keep the policy on the token where it lives with the keyslot it protects.
+> The crypttab option `tpm2-device=auto` is sufficient: it tells `systemd-cryptsetup` to look up the TPM2 token and use whatever PCR configuration was committed at enrollment time. Specifying `tpm2-pcrs=` or `tpm2-public-key-pcrs=` in crypttab would create a second source of truth that can drift from the LUKS token; the systemd convention is to keep the policy on the token where it lives with the keyslot it protects.
 
 > [!NOTE]
 > **Initramfs propagation**
@@ -227,7 +230,7 @@ The disk does not trust the system. It trusts the key. The key trusts the pipeli
 
 ---
 
-## 7. Recovery Keyslot — Mandatory
+## 7. Recovery Keyslot: Mandatory
 
 > [!WARNING]
 > **Always Maintain a Recovery Keyslot**
@@ -240,13 +243,13 @@ The disk does not trust the system. It trusts the key. The key trusts the pipeli
 systemd-cryptenroll /dev/nvme0n1p3 --password
 ```
 
-Store the recovery credential in an offline vault or escrow system. See [Module 4 — Disaster Recovery](04_Governance_Recovery_Lifecycle.md) for full recovery procedures.
+Store the recovery credential in an offline vault or escrow system. See [Module 4: Disaster Recovery](04_Governance_Recovery_Lifecycle.md) for full recovery procedures.
 
 ---
 
 ## Related Notes
 
-- [Introduction — Architecture Overview](00_Introduction.md)
-- [Module 1 — UKI and Measurement](01_Unified_Kernel_Image.md)
-- [Module 2 — Forward Sealing](02_Forward_Sealing.md)
-- [Module 4 — Governance, Recovery, and Lifecycle](04_Governance_Recovery_Lifecycle.md)
+- [Introduction: Architecture Overview](00_Introduction.md)
+- [Module 1: UKI and Measurement](01_Unified_Kernel_Image.md)
+- [Module 2: Forward Sealing](02_Forward_Sealing.md)
+- [Module 4: Governance, Recovery, and Lifecycle](04_Governance_Recovery_Lifecycle.md)

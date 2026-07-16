@@ -7,17 +7,24 @@ module: 0
 status: stable
 ---
 
-# Trusted Boot Chain — Introduction
+# Trusted Boot Chain: Introduction
 
 ## What This Project Builds
 
-This project implements a **hardware-backed trusted boot chain** for Linux systems. The goal is a self-verifying system that enforces integrity at boot time using hardware — requiring no trust in any individual person or software component.
+This project implements a **hardware-backed trusted boot chain** for Linux
+systems. It reduces the number of discretionary decisions made during boot by
+combining Secure Boot verification, TPM measurements and a LUKS2 unlock policy.
+The design still depends on trusted firmware, enrolled keys, systemd-stub, the
+TPM, the signing path and sound key administration.
 
-The chain guarantees that disk encryption keys are only released when the system boots in a cryptographically verified, unmodified configuration. Any tampering with the kernel, initramfs, boot parameters, or Secure Boot policy causes the system to deny access to protected data.
+The TPM-backed keyslot releases its secret only when the enrolled PCR 7 policy
+and the signed PCR 11 policy both match. Changes to measured or verified boot
+inputs therefore prevent automatic TPM unlock. The independent recovery
+keyslot remains available for diagnosis and repair.
 
 > [!NOTE]
-> **One-Sentence Definition**
-> A system where the hardware itself decides whether the software is trustworthy enough to access the encrypted disk.
+> The hardware checks a defined boot policy before releasing the credential
+> used for automatic disk unlock.
 
 ---
 
@@ -46,14 +53,14 @@ The project README describes a five-layer stack: layer 1 (the custom Secure Boot
 > **Without Module 4:** The system enforces trust technically.
 > **With Module 4:** The organisation governs trust operationally.
 >
-> A system without Module 4 is secure but brittle — it cannot survive key rotation, hardware failure, or personnel change.
+> A system without Module 4 is secure but brittle: it cannot survive key rotation, hardware failure, or personnel change.
 
 ---
 
 ## What This Prevents
 
 - Booting a tampered kernel or initramfs
-- Modifying kernel boot parameters to bypass security
+- Modifying the embedded kernel command line without producing a new trusted UKI
 - Cloning a disk and accessing it on different hardware
 - Accessing encrypted data from a live USB or recovery environment
 - Rolling back to a known-vulnerable system state (optional)
@@ -66,6 +73,8 @@ The project README describes a five-layer stack: layer 1 (the custom Secure Boot
 - Network security controls
 - Post-boot access control (PAM, sudo, SELinux)
 - Physical security of the hardware itself
+- Protection of a system that is already running with a compromised root account
+- Key governance, monitoring or incident response
 
 > [!WARNING]
 > **Physical Access Threat Model**
@@ -73,7 +82,7 @@ The project README describes a five-layer stack: layer 1 (the custom Secure Boot
 
 ---
 
-## Trust Flow at a Glance
+## Trust Flow Summary
 
 ```
 Firmware (UEFI)
@@ -98,7 +107,7 @@ System boots
 
 ## Related Notes
 
-- [Module 1 — UKI and Measurement](01_Unified_Kernel_Image.md)
-- [Module 2 — Forward Sealing](02_Forward_Sealing.md)
-- [Module 3 — Disk Encryption and Policy Enforcement](03_Disk_Encryption_and_Policy_Enforcement.md)
-- [Module 4 — Governance, Recovery, and Lifecycle](04_Governance_Recovery_Lifecycle.md)
+- [Module 1: UKI and Measurement](01_Unified_Kernel_Image.md)
+- [Module 2: Forward Sealing](02_Forward_Sealing.md)
+- [Module 3: Disk Encryption and Policy Enforcement](03_Disk_Encryption_and_Policy_Enforcement.md)
+- [Module 4: Governance, Recovery, and Lifecycle](04_Governance_Recovery_Lifecycle.md)

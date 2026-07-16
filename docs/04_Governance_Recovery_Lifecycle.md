@@ -9,7 +9,7 @@ module: 4
 status: stable
 ---
 
-# Module 4 — Governance, Recovery, and Lifecycle Control
+# Module 4: Governance, Recovery, and Lifecycle Control
 
 ## Purpose of This Module
 
@@ -26,8 +26,10 @@ Module 4 addresses:
 - How the system is safely decommissioned
 
 > [!NOTE]
-> **The Core Principle**
-> The system no longer depends on trust in people. It depends on cryptographic authority with governed lifecycle control.
+> **Core principle**
+> Cryptographic controls reduce discretionary trust during boot, while key
+> custody, recovery and audit procedures govern the people and systems that
+> retain authority over the machine.
 
 ---
 
@@ -45,21 +47,31 @@ Key governance is therefore equivalent to system governance. The security of the
 
 ### 4.1.2 Signing Authority Hierarchy
 
-The private key must never reside on developer machines, never be committed to version control, and never be reused manually outside the CI pipeline.
+For a centrally managed deployment, keep the policy private key out of
+developer workstations and version control and restrict its use to the signing
+service. The validated lab uses a different boundary: the policy key is stored
+as a TPM-sealed credential on the endpoint, and the hook decrypts it briefly
+during a local build. Module 5 describes that implementation and its exposure
+to a compromised running host.
 
 Recommended hierarchy:
 
 ```
-Offline Root Key        (optional — long-term, air-gapped)
+Offline Root Key        (optional: long-term, air-gapped)
         │
         ▼
-CI/CD Signing Key       (operational — used per UKI build)
+CI/CD Signing Key       (operational: used per UKI build)
         │
         ▼
 UKI PCR Signatures      (per-image artefacts)
 ```
 
-The offline root key signs the CI key. The CI key signs PCR policies. If the CI key is compromised, it can be rotated without touching the offline root. If you choose not to use a root key hierarchy, the CI key becomes the trust anchor directly.
+The offline root can authorise provisioning of an operational CI key, and the
+CI key signs PCR policies. This is a governance hierarchy, not a certificate
+chain evaluated by `systemd-cryptsetup`: the operational public key enrolled in
+the LUKS2 token remains the direct TPM policy trust anchor. Rotating that key
+therefore still requires the controlled enrollment transition in section
+4.2.2.
 
 ### 4.1.3 Independent Security Layers
 
@@ -87,35 +99,46 @@ Key rotation is required when any of the following occur:
 - Organisation changes ownership or personnel with key access
 - Scheduled rotation policy interval is reached (e.g. annually)
 
-### 4.2.2 Zero-Downtime Rotation with Dual Keyslots
+### 4.2.2 Controlled Policy-Key Rotation with Dual Keyslots
 
-LUKS2 supports multiple keyslots simultaneously. Use this capability to rotate keys without a window of inaccessibility.
+LUKS2 supports multiple TPM2 keyslots simultaneously. A second slot keeps the
+old enrollment available during preparation, but it does not prove that a UKI
+carrying the new embedded policy will unlock before that UKI has been booted.
+Keep the recovery passphrase available throughout the transition.
 
 **Procedure:**
 
 ```
-Phase 1 — Prepare new key
-  1. Generate new keypair (new policy private key + new policy public key)
-  2. Enroll new public key into a second LUKS2 TPM2 keyslot (Slot B)
+Phase 1: Prepare and inspect the new policy
+  1. Generate a new policy keypair.
+  2. Seal the new private key for the signing environment and retain the old
+     key material until validation is complete.
+  3. Build and inspect a replacement UKI that embeds the new public key and a
+     PCR 11 signature made by the new private key. Sign the UKI with the
+     Secure Boot db key.
+  4. Enroll the new public key into a second LUKS2 TPM2 keyslot (Slot B).
      systemd-cryptenroll /dev/nvme0n1p3 \
        --tpm2-device=auto \
        --tpm2-pcrs=7 \
        --tpm2-public-key=new-pcr-public-key.pem \
        --tpm2-public-key-pcrs=11
-  3. Verify Slot B unlocks successfully before proceeding
 
-Phase 2 — Transition
-  4. Update CI/CD pipeline to sign with new private key
-  5. Re-sign current approved UKI with new key; ship updated .pcrsig
+Phase 2: Boot validation
+  5. Install the replacement UKI while retaining a known-good recovery path.
+  6. Reboot with console access and the recovery passphrase available.
+  7. Confirm that the new TPM2 slot unlocked the volume and that runtime PCR 11
+     matches the prediction embedded in the selected UKI.
 
-Phase 3 — Remove old key
-  6. Confirm all hosts unlock via Slot B
-  7. Remove old keyslot (Slot A)
+Phase 3: Remove old key
+  8. Configure the signing path to use only the new policy key.
+  9. Repeat the boot validation on every affected host.
+ 10. Remove old keyslot (Slot A).
      systemd-cryptenroll /dev/nvme0n1p3 --wipe-slot=<old-slot-number>
 ```
 
 > [!WARNING]
-> Never remove the old keyslot until the new one is verified working on the target system. Removing it prematurely causes permanent lockout.
+> Never remove the old TPM2 slot or the recovery keyslot until the new slot has
+> completed a real boot-time unlock on the target system.
 
 The `--wipe-slot=tpm2` shorthand removes all existing TPM2 slots and can be used for atomic replacement in one operation when re-enrolling from scratch.
 
@@ -127,7 +150,7 @@ The `--wipe-slot=tpm2` shorthand removes all existing TPM2 slots and can be used
 
 **Immediate response:**
 
-1. Disable the CI/CD pipeline — halt all signing operations
+1. Disable the CI/CD pipeline: halt all signing operations
 2. Generate a new keypair
 3. Enroll new public key into the LUKS2 header (Slot B, following rotation procedure)
 4. Re-sign the current approved UKI with the new private key
@@ -135,7 +158,10 @@ The `--wipe-slot=tpm2` shorthand removes all existing TPM2 slots and can be used
 
 **If an attacker signed a malicious UKI before detection:** The malicious UKI would pass PCR policy validation (policy key was theirs). However, it would still need to pass Secure Boot signature validation. If the attacker does not also hold the Secure Boot `db` private key, the malicious UKI will not boot.
 
-This is why Secure Boot key and policy key must be kept separately and should never be held by the same person.
+Keeping the Secure Boot and policy keys in separate administrative domains can
+limit this failure. The validated local lab does not provide that separation:
+an approved running host can use both signing paths. Treat compromise of that
+host as compromise of the complete local signing authority.
 
 ### 4.3.2 CI/CD Runner Compromise
 
@@ -143,7 +169,7 @@ If the CI runner itself is compromised, assume the private key is exposed regard
 
 Response:
 
-1. Treat private key as compromised — begin rotation immediately
+1. Treat private key as compromised: begin rotation immediately
 2. Rebuild the runner from a known-clean state
 3. Audit the full artefact history produced by the compromised runner
 4. Review all signing logs for anomalous entries
@@ -156,7 +182,7 @@ All signing operations must produce immutable, timestamped audit logs. Without t
 
 > [!WARNING]
 > **Mandatory Recovery Keyslot**
-> Every LUKS2 volume with a TPM2 keyslot must also have an independent recovery credential — a high-entropy passphrase or offline recovery key stored in a secure vault. Red Hat explicitly requires this for all TPM-backed LUKS configurations.
+> Every LUKS2 volume with a TPM2 keyslot must also have an independent recovery credential: a high-entropy passphrase or offline recovery key stored in a secure vault. Red Hat explicitly requires this for all TPM-backed LUKS configurations.
 >
 > A disk with only a TPM2 keyslot is a disk you can permanently lose access to. Firmware updates, Secure Boot key rotation, TPM replacement, or PCR policy drift can all cause TPM unlock to fail.
 
@@ -168,7 +194,17 @@ When a motherboard is replaced, the TPM is also replaced. The new TPM has no kno
 
 1. Boot into recovery mode or live environment
 2. Unlock the disk using the recovery passphrase or offline recovery key
-3. Re-enroll a new TPM2 keyslot using the new TPM:
+3. Recover the policy private key from an independent escrow copy, or generate
+   a new policy keypair. The existing
+   `/etc/systemd/tpm2-pcr-private-key.pem.enc` was sealed by the old TPM and
+   cannot be decrypted by the replacement.
+4. Seal the recovered or new policy private key to PCR 7 on the replacement TPM
+   with `systemd-creds encrypt`. Install the matching public key and encrypted
+   credential at the paths used by `80-tpm2-sign.install`.
+5. Rebuild and verify every retained UKI so that each embeds the matching
+   `.pcrpkey` and `.pcrsig` sections.
+6. Re-enroll a TPM2 keyslot using the replacement TPM and the matching public
+   key:
    ```bash
    systemd-cryptenroll /dev/nvme0n1p3 \
      --wipe-slot=tpm2 \
@@ -177,8 +213,9 @@ When a motherboard is replaced, the TPM is also replaced. The new TPM has no kno
      --tpm2-public-key=/etc/systemd/tpm2-pcr-public-key.pem \
      --tpm2-public-key-pcrs=11
    ```
-4. Verify TPM unlock works with the new hardware
-5. Retain or remove the recovery key according to policy
+7. Reboot with console access and the recovery passphrase available.
+8. Confirm automatic TPM unlock, Secure Boot state and runtime PCR 11.
+9. Retain the independent recovery keyslot.
 
 ### 4.4.2 Disk Migration to New Hardware
 
@@ -187,9 +224,10 @@ Moving a LUKS2 disk to a different machine means the new TPM will have different
 **Procedure:**
 
 1. Unlock the disk on the new hardware using the recovery credential
-2. Re-enroll the TPM2 keyslot for the new machine's TPM and PCR state
-3. Verify unlock
-4. Optionally remove the recovery key after confirming TPM path works
+2. Follow the policy-key recovery, resealing, UKI rebuild and TPM2 enrollment
+   procedure in section 4.4.1
+3. Verify automatic unlock through a real reboot
+4. Retain the independent recovery keyslot
 
 ### 4.4.3 Recovery Runbook Reference
 
@@ -206,7 +244,9 @@ Every system should have a documented runbook covering:
 
 ### 4.5.1 Separation of Duties
 
-No single person should hold complete control over the trust chain.
+A production deployment should divide control over the trust chain where its
+staffing and tooling can enforce that separation. The validated single-host lab
+does not demonstrate this organisational control.
 
 | Role | Capability |
 |------|------------|
@@ -216,7 +256,9 @@ No single person should hold complete control over the trust chain.
 | Security Administrator | Rotate keys, manage keyslots |
 | Recovery Officer | Hold and manage the recovery credential |
 
-Separation of duties means that compromise of any single role does not compromise the entire system.
+When credentials, approvals and execution environments are genuinely separate,
+compromise of one role need not grant every capability in the table. Merely
+assigning different role names does not create that boundary.
 
 ### 4.5.2 Protected Branch Enforcement
 
@@ -242,7 +284,7 @@ All signing operations must produce immutable, append-only log entries containin
 | Signing key ID | Identifies which key performed the signing |
 
 > [!IMPORTANT]
-> If you cannot prove what was signed, by which key, and when — you do not have governance. You have the appearance of governance.
+> If you cannot prove what was signed, by which key, and when: you do not have governance. You have the appearance of governance.
 
 Audit logs must be stored outside the CI system so that a compromised runner cannot alter its own history.
 
@@ -250,14 +292,15 @@ Audit logs must be stored outside the CI system so that a compromised runner can
 
 ## 4.7 Rollback and Version Control
 
-Forward sealing supports rollback prevention. To deny access to a deprecated or vulnerable UKI version:
+In the validated design, each UKI embeds its own `.pcrpkey` and `.pcrsig`
+sections. An older signed UKI remains authorised as long as it remains
+selectable and its embedded policy is accepted by an enrolled TPM2 slot.
 
-- Do not re-sign its PCR value (no new `.pcrsig` issued)
-- Remove any existing `.pcrsig` for that version from the system
-- Maintain a version whitelist — only currently signed PCR values are authorised
-
-> [!NOTE]
-> Rollback support (allowing older versions to boot) is achieved by keeping multiple valid `.pcrsig` files on the system — one per authorised UKI version. `systemd-cryptsetup` will try each signature until one matches the current PCR state. Remove a signature to revoke that version's access.
+To revoke an old version, remove it from every bootable location and confirm
+that it is no longer referenced by the boot loader or firmware variables. If a
+retained UKI must remain bootable but must no longer unlock automatically,
+rebuild it under the current policy or rotate the enrolled policy key. Deleting
+a separate JSON signature file does not revoke a policy embedded in a UKI.
 
 ---
 
@@ -306,7 +349,7 @@ Module 4 → GOVERNANCE
 
 ---
 
-## 4.10 Complete Architecture Guarantees
+## 4.10 Properties and Preconditions
 
 | Property | Mechanism |
 |----------|-----------|
@@ -315,7 +358,7 @@ Module 4 → GOVERNANCE
 | Cryptographic enforcement | TPM2 keyslot in LUKS2 header |
 | Controlled authority | Policy key governance |
 | Safe recovery | Recovery keyslot + documented runbook |
-| Secure evolution | Zero-downtime key rotation via dual keyslots |
+| Controlled evolution | Dual-slot transition with recovery-assisted boot validation |
 | Auditability | Immutable signing logs per artefact |
 | Decommissioning | Full keyslot and header wipe procedure |
 
@@ -323,7 +366,7 @@ Module 4 → GOVERNANCE
 
 ## Related Notes
 
-- [Introduction — Architecture Overview](00_Introduction.md)
-- [Module 1 — UKI and Measurement](01_Unified_Kernel_Image.md)
-- [Module 2 — Forward Sealing](02_Forward_Sealing.md)
-- [Module 3 — Disk Encryption and Policy Enforcement](03_Disk_Encryption_and_Policy_Enforcement.md)
+- [Introduction: Architecture Overview](00_Introduction.md)
+- [Module 1: UKI and Measurement](01_Unified_Kernel_Image.md)
+- [Module 2: Forward Sealing](02_Forward_Sealing.md)
+- [Module 3: Disk Encryption and Policy Enforcement](03_Disk_Encryption_and_Policy_Enforcement.md)

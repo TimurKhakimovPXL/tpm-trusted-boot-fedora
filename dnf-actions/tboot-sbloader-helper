@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# tboot-sbloader-helper — B.4 systemd-boot signing + propagation worker
-# Version: 0.1.0-draft-B.4-pre-validation-r4
+# tboot-sbloader-helper: B.4 systemd-boot signing + propagation worker
+# Version: 1.0.0
 # Role: sign the source systemd-boot loader with the local db key, PROVE in a
 #       throwaway loopback ESP that 'bootctl --no-variables install' selects the
 #       signed binary for BOTH propagation targets, then propagate to the real
 #       ESP. Fail-closed before any real-ESP write. UKI/PCR signing is NOT this
 #       script's job.
 #
-# State layout — B.4 single locked dir /var/lib/tboot-sbloader (Option A):
+# State layout: B.4 single locked dir /var/lib/tboot-sbloader (Option A):
 #   helper-last-error, helper-last-success            (this script)
 #   sbloader-manifest.baseline, last-computed-manifest,
 #   last-decision, last-error                         (decider: tboot-sbloader-posttrans)
@@ -16,7 +16,7 @@
 set -euo pipefail
 umask 077
 
-readonly VERSION="0.1.0-draft-B.4-pre-validation-r4"
+readonly VERSION="1.0.0"
 readonly TAG="tboot-sbloader-helper"
 
 readonly SOURCE_EFI="/usr/lib/systemd/boot/efi/systemd-bootx64.efi"
@@ -53,8 +53,14 @@ _signer_count() {
 }
 
 _ensure_state_dir() {
-  [ -d "$STATE_DIR" ] && return 0
-  install -d -m 0700 -o root -g root "$STATE_DIR"
+  if [ ! -e "$STATE_DIR" ]; then
+    install -d -m 0700 -o root -g root "$STATE_DIR" || return 1
+  fi
+  [ ! -L "$STATE_DIR" ] || return 1
+  [ -d "$STATE_DIR" ] || return 1
+  [ "$(stat -c '%U:%G' "$STATE_DIR" 2>/dev/null)" = "root:root" ] || return 1
+  [ "$(stat -c '%a' "$STATE_DIR" 2>/dev/null)" = "700" ] || return 1
+  [ -w "$STATE_DIR" ] || return 1
 }
 
 _write_last_error() {
@@ -78,7 +84,7 @@ _write_last_error() {
 }
 
 _ensure_sentinel() {
-  # normal mode only — never mark the boot path unsafe from self-test/dry-run
+  # normal mode only: never mark the boot path unsafe from self-test/dry-run
   [ "$MODE" = "normal" ] || return 0
 
   local reason="$1"
@@ -138,7 +144,7 @@ preflight() {
   require_root
 
   local b
-  for b in sbsign sbverify pesign bootctl mkfs.vfat mount umount losetup sha256sum logger install awk flock; do
+  for b in sbsign sbverify pesign bootctl mkfs.vfat mount umount losetup sha256sum logger install awk flock stat; do
     command -v "$b" >/dev/null 2>&1 || die_stage "preflight" "missing binary: $b"
   done
 
@@ -232,16 +238,16 @@ loopback_checkpoint() {
 
   # BOTH targets must equal .efi.signed and differ from the unsigned source.
   [ "$got_sys" = "$signed_sha" ] \
-    || die_stage "checkpoint" "sandbox /EFI/systemd != .efi.signed (got=$got_sys signed=$signed_sha) — real ESP NOT touched"
+    || die_stage "checkpoint" "sandbox /EFI/systemd != .efi.signed (got=$got_sys signed=$signed_sha): real ESP NOT touched"
 
   [ "$got_boot" = "$signed_sha" ] \
-    || die_stage "checkpoint" "sandbox /EFI/BOOT/BOOTX64.EFI != .efi.signed (got=$got_boot signed=$signed_sha) — real ESP NOT touched"
+    || die_stage "checkpoint" "sandbox /EFI/BOOT/BOOTX64.EFI != .efi.signed (got=$got_boot signed=$signed_sha): real ESP NOT touched"
 
   [ "$got_sys" != "$src_sha" ] \
-    || die_stage "checkpoint" "sandbox /EFI/systemd == unsigned source — real ESP NOT touched"
+    || die_stage "checkpoint" "sandbox /EFI/systemd == unsigned source: real ESP NOT touched"
 
   [ "$got_boot" != "$src_sha" ] \
-    || die_stage "checkpoint" "sandbox /EFI/BOOT == unsigned source — real ESP NOT touched"
+    || die_stage "checkpoint" "sandbox /EFI/BOOT == unsigned source: real ESP NOT touched"
 
   log "checkpoint PASS: bootctl install selected .efi.signed for BOTH targets in sandbox ESP ($signed_sha)"
 }

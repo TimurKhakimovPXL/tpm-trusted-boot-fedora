@@ -9,7 +9,7 @@ module: 1
 status: stable
 ---
 
-# Module 1 — The Unified Kernel Image (UKI) and Measurement
+# Module 1: The Unified Kernel Image (UKI) and Measurement
 
 ## Purpose of This Module
 
@@ -58,7 +58,7 @@ The initramfs provides the tools and context to handle all of this.
 > **Common Misconception**
 > Neither the kernel nor the initramfs itself unlocks the disk. The initramfs **loads the userspace tools** (`systemd-cryptsetup`, `cryptsetup`) that perform the unlock. The initramfs is the environment; the tools inside it do the work.
 
-**Correct mental model:** The kernel has the drivers but not the map. The initramfs provides the map — where root lives, how to unlock it, and which device to trust.
+**Correct assumption:** The kernel has the drivers but not the map. The initramfs provides the map: where root lives, how to unlock it, and which device to trust.
 
 ---
 
@@ -90,7 +90,7 @@ A **UKI** is a single UEFI-executable PE binary that bundles all boot components
 
 ### 2.2 Classical Boot vs UKI Boot
 
-**Classical boot — fragmented trust:**
+**Classical boot: fragmented trust:**
 
 ```
 Bootloader → Kernel      (separate file, can be replaced)
@@ -98,9 +98,9 @@ Bootloader → Kernel      (separate file, can be replaced)
            → Cmdline     (separate config, can be modified)
 ```
 
-Attack surface: any component can be modified, redirected, or replaced independently. An attacker who replaces the initramfs can intercept disk decryption, implant backdoors, or redirect the root filesystem — and Secure Boot cannot detect this if only the kernel is signed.
+Attack surface: any component can be modified, redirected, or replaced independently. An attacker who replaces the initramfs can intercept disk decryption, implant backdoors, or redirect the root filesystem, and Secure Boot cannot detect this if only the kernel is signed.
 
-**UKI boot — unified trust:**
+**UKI boot: unified trust:**
 
 ```
 UEFI → Signed UKI → Verified + Measured
@@ -126,7 +126,7 @@ Everything boots together, or nothing boots.
 
 ### 3.2 systemd-stub
 
-`systemd-stub` is the PE stub embedded inside every UKI. It is the root of measurement — the component that bridges UEFI execution and TPM recording.
+`systemd-stub` is the PE stub embedded inside every UKI. It is the root of measurement: the component that bridges UEFI execution and TPM recording.
 
 **Responsibilities:**
 
@@ -141,7 +141,7 @@ Everything boots together, or nothing boots.
 > 1. The section **name** in ASCII (with trailing NUL) → PCR 11
 > 2. The section **binary content** → PCR 11
 >
-> This means PCR 11 is sensitive to both the content and the naming of sections. Use `ukify` strictly — it implements the UAPI.5 spec and produces measurements that `systemd-measure` can predict accurately.
+> This means PCR 11 is sensitive to both the content and the naming of sections. Use `ukify` strictly: it implements the UAPI.5 spec and produces measurements that `systemd-measure` can predict accurately.
 
 **Runtime execution chain:**
 
@@ -155,15 +155,15 @@ UKI → systemd-stub → kernel → initramfs → switch_root → systemd
 
 ### 4.1 What PCRs Are
 
-Platform Configuration Registers (PCRs) are registers inside the TPM chip that accumulate measurements of the boot process. They cannot be written to directly — only **extended**:
+Platform Configuration Registers (PCRs) are registers inside the TPM chip that accumulate measurements of the boot process. They cannot be written to directly: only **extended**:
 
 $$PCR_{new} = HASH(PCR_{old} \mathbin\| NewData)$$
 
 This hash-chaining means PCR values are append-only digests of all prior measurements. They reset only on TPM reset or power-on.
 
 > [!TIP]
-> **Mental Model**
-> Think of the TPM as a flight recorder (black box). It passively records everything that happens from power-on. It does not verify or approve anything — it only records. The policy engine reads the recording and decides.
+> **assumption**
+> Think of the TPM as a flight recorder (black box). It passively records everything that happens from power-on. It does not verify or approve anything: it only records. The policy engine reads the recording and decides.
 
 ### 4.2 PCR Registry (UAPI.7)
 
@@ -173,11 +173,11 @@ The Linux TPM PCR Registry defines which component measures into which register 
 |-----|--------------|---------|
 | 0 | `platform-code` | Core firmware (UEFI) |
 | 1 | `platform-config` | BIOS settings, hardware identity |
-| 2–3 | — | Option ROM and device firmware |
+| 2–3 |: | Option ROM and device firmware |
 | 4 | `boot-loader-code` | Bootloader binaries; systemd-stub also writes here |
 | 5 | `boot-loader-config` | `loader.conf`, partition table |
 | 7 | `secure-boot-policy` | Secure Boot state, DB/DBX/PK/KEK certificates |
-| 9 | `kernel-initrd` | Kernel-measured initrds (volatile — avoid for direct binding) |
+| 9 | `kernel-initrd` | Kernel-measured initrds (volatile: avoid for direct binding) |
 | 11 | `kernel-boot` | UKI sections + boot phase markers |
 | 12 | `kernel-config` | Command lines, credentials |
 | 13 | `sysexts` | System extension images |
@@ -188,16 +188,17 @@ The Linux TPM PCR Registry defines which component measures into which register 
 
 > [!NOTE]
 > **Shim Elimination Advantage**
-> This project uses systemd-boot directly without shim. As a result, PCR 14 (`shim-policy`) remains at its initial zero value and is stable — one fewer variable in the trust equation.
+> This project uses systemd-boot directly without shim. As a result, PCR 14 (`shim-policy`) remains at its initial zero value and is stable: one fewer variable in the trust equation.
 
 > [!WARNING]
 > **PCR Stability Considerations**
 > - PCR 0, 2: change with firmware updates. Do not use for direct long-lived binding.
 > - PCR 9: highly volatile on systems with frequent dracut regeneration. Avoid for direct binding.
 > - PCR 7: stable until Secure Boot key rotation. Good anchor.
-> - PCR 11: changes with every UKI update — this is intentional and handled by forward sealing (Module 2).
+> - PCR 11: changes when an update changes measured UKI content. Forward
+>   sealing handles those new states (Module 2).
 
-### 4.3 Secure Boot vs TPM — Distinct Responsibilities
+### 4.3 Secure Boot vs TPM: Distinct Responsibilities
 
 These two mechanisms are often confused. They are complementary, not redundant.
 
@@ -229,17 +230,17 @@ systemd-stub measures sections → PCR 11
 PCR 11 value represents the exact UKI that ran
   │
   ▼
-Policy engine checks: is this PCR state approved?
+Policy engine checks, is this PCR state approved?
   │
   ├─ Yes → TPM releases sealed secret → disk unlocks
   └─ No  → disk remains inaccessible
 ```
 
-If anything in the UKI was modified — kernel, initramfs, cmdline, or any other section — PCR 11 will differ from the approved value, and the key will not be released.
+If anything in the UKI was modified: kernel, initramfs, cmdline, or any other section: PCR 11 will differ from the approved value, and the key will not be released.
 
 ### 5.1 What Happens if the initramfs Is Compromised?
 
-A compromised initramfs is dangerous precisely because it runs inside the trusted boot boundary — as root, before any security mechanisms are active.
+A compromised initramfs is dangerous precisely because it runs inside the trusted boot boundary: as root, before any security mechanisms are active.
 
 **Without UKI:** An attacker who replaces the initramfs can intercept disk decryption, redirect the root filesystem, disable policy enforcement, and implant persistent backdoors. If the attacker also signs the modified initramfs, Secure Boot accepts it. The TPM measures it. Policies match. Secrets are released. The system is compromised but appears trusted.
 
@@ -256,12 +257,12 @@ Secure Boot    → verifies the UKI signature before execution
 Policy Engine  → reads PCRs, decides whether to release the disk key
 ```
 
-The UKI is not just a packaging convenience. It is the mechanism that makes the system's identity deterministic and tamper-evident — the prerequisite for everything in Modules 2, 3, and 4.
+The UKI is not just a packaging convenience. It is the mechanism that makes the system's identity deterministic and tamper-evident: the prerequisite for everything in Modules 2, 3, and 4.
 
 ---
 
 ## Related Notes
 
-- [Introduction — Architecture Overview](00_Introduction.md)
-- [Module 2 — Forward Sealing](02_Forward_Sealing.md)
-- [Module 3 — Disk Encryption and Policy Enforcement](03_Disk_Encryption_and_Policy_Enforcement.md)
+- [Introduction: Architecture Overview](00_Introduction.md)
+- [Module 2: Forward Sealing](02_Forward_Sealing.md)
+- [Module 3: Disk Encryption and Policy Enforcement](03_Disk_Encryption_and_Policy_Enforcement.md)
