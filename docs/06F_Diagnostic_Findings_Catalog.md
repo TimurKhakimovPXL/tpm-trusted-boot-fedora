@@ -311,13 +311,13 @@ objdump -h "$INSPECT_COPY" | awk '
 
 *Hook validation (former 06X D.2):* Validating a hook by checking only that all sections are present, sbverify passes, and signer count is 1, is insufficient. These structural checks pass on the broken-objcopy hook but do not detect firmware rejection. Validation must include section-VMA sanity (above) or per-section sha256 comparison against a known-good reference UKI.
 
-*Broken hook installation (former 06X D.3):* Installing the objcopy-form hook at `/etc/kernel/install.d/80-tpm2-sign.install` is forbidden. Any subsequent `dnf upgrade kernel*` or `dnf reinstall kernel*` would invoke the broken hook and produce a firmware-rejected UKI on the ESP, bricking the kernel update path until manual recovery. The hook with sha `0660b0f50e3d0ba583e266bfdbcd323faea8c951a5e02affc4c1f96e3f572673` is the broken form. The validated v2.1.2 hook is sha `a455444a54f5be265f822d85f4681cba8ed5365a4323c9008835022f3b8c502f`.
+*Broken hook installation (former 06X D.3):* Installing the objcopy-form hook at `/etc/kernel/install.d/80-tpm2-sign.install` is forbidden. Any subsequent `dnf upgrade kernel*` or `dnf reinstall kernel*` would invoke the broken hook and produce a firmware-rejected UKI on the ESP, bricking the kernel update path until manual recovery. The hook with sha `0660b0f50e3d0ba583e266bfdbcd323faea8c951a5e02affc4c1f96e3f572673` is the broken form. The validated v2.1.2-r1 hook is sha `5857e51d5551e05a7ca384f71529ec2fef07f5a6dbe40df70c6bbe49d720947e`.
 
 *Broken-hook snapshot (former 06X D.4):* The Proxmox snapshot `module5-kernel-signing-hook-installed` captures the broken-hook state. It is preserved for forensic reference but **must not be used as a rollback target for active work**. Rolling forward from it leaves a non-bootable update path the next time DNF runs a kernel transaction. The current rollback target is `module5-kernel-signing-hook-validated`. See `00_Current_Project_State.md` snapshot lineage.
 
 *Reboot to objcopy UKI (former 06X D.8):* Booting a UKI built via the broken objcopy path is reproducibly destructive. The only legitimate use is forensic reproduction of the failure mode. The forensic UKI is preserved at `/boot/efi/EFI/Linux/cf44500de…6bc70-6.19.14-200.fc43.x86_64.efi.loaderror` with `.loaderror` suffix to prevent accidental boot selection.
 
-*Stale dry-run methodology (former 06X S.1):* The dry-run pattern in `06_Lab_Setup_Runbook_continuation.md` §18.4 was sound, but the specific dry-run validated the broken-objcopy hook, so its output values are not authoritative. The validated equivalent is in `06_Lab_Setup_Runbook_continuation_v3.md` §20.3 to §20.5, against the v2.1.2 hook.
+*Stale dry-run methodology (former 06X S.1):* The dry-run pattern in `06_Lab_Setup_Runbook_continuation.md` §18.4 was sound, but the specific dry-run validated the broken-objcopy hook, so its output values are not authoritative. The validated equivalent is in `06_Lab_Setup_Runbook_continuation_v3.md` §20.3 to §20.5, against the v2.1.2-r1 hook.
 
 **objcopy: safe vs unsafe (former 06X C.3):**
 
@@ -342,7 +342,7 @@ objcopy --add-section .pcrsig=... uki.efi
 The hook's stage 10 validation deliberately copies the UKI to a tmpfs scratch path before running objdump or objcopy inspection on it, to prevent any accidental write-path on the production file.
 
 **Cross-reference:**
-- `06B`: Step 14 (validated v2.1.2 hook source), Step 15 (install hook), Step 18 (validated snapshot)
+- `06B`: Step 14 (validated v2.1.2-r1 hook source), Step 15 (install hook), Step 18 (validated snapshot)
 - Evidence: `06_Lab_Setup_Runbook_continuation.md` §16.13 (root cause), §18 (Block B.1 broken-objcopy execution log), `06_Lab_Setup_Runbook_continuation_v2_1_patches.md` §20.5b (forensic reboot record)
 
 **Meta-finding:**
@@ -845,7 +845,7 @@ _cleanup() {
 trap _cleanup EXIT HUP INT TERM
 ```
 
-The validated hook v2.1.2 has this directive. Removing it (e.g. by re-pasting through a markdown renderer that strips comments) will cause the lint check in `06B` Step 14 to fail.
+The validated hook v2.1.2-r1 has this directive. Removing it (e.g. by re-pasting through a markdown renderer that strips comments) will cause the lint check in `06B` Step 14 to fail.
 
 **Cross-reference:**
 - `06B`: Step 14 (hook source, SC2317/SC2329 disable on `_cleanup`)
@@ -2021,7 +2021,7 @@ PRE_EPOCH="1779695618"
 
 EXP_DECIDER_SHA="35ad8733f190483f1bd6d071d2aa7cb8b1549286f9040086182443c584473cdd"
 EXP_PRODRULE_SHA="dfbffe56fa95f4e0231569bb3a1aabc8952b9f99c9d290e4f8fb1005ef90d798"
-EXP_HOOK_SHA="a455444a54f5be265f822d85f4681cba8ed5365a4323c9008835022f3b8c502f"
+EXP_HOOK_SHA="5857e51d5551e05a7ca384f71529ec2fef07f5a6dbe40df70c6bbe49d720947e"
 EXP_HELPER_SHA="4bef223925d3a2520e692403f0c0dd8a932770ec17136008a3d5f6f0b2620f4b"
 EXP_PREDICT_SHA="2d4985fa27726efff50bd91ba33ed1dd6e516fe2dd7350a48c73369b61aff160"
 EXP_OLD_BASELINE_SHA="75dc4f5651fc8996d39b545ac0bf7244a2a5888403b0ba0cd448a671daf80160"
